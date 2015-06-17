@@ -1,0 +1,257 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		095AE9C6970B4B1C2FD6B975 /* node-gles2.cc in Sources */ = {isa = PBXBuildFile; fileRef = 7FCD7CFAB0D3A9C68049610E /* node-gles2.cc */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		1A4BA0E89DFA322F53098B76 /* libnode-gles2-osx.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libnode-gles2-osx.a"; sourceTree = BUILT_PRODUCTS_DIR; };
+		29420497326D2C8C2D2B66E9 /* node-gles2.gyp */ = {isa = PBXFileReference; explicitFileType = sourcecode; path = "node-gles2.gyp"; sourceTree = "<group>"; };
+		7FCD7CFAB0D3A9C68049610E /* node-gles2.cc */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "node-gles2.cc"; sourceTree = "<group>"; };
+		BEDBAF1E12F83D5D58B9B30C /* node-gles2.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "node-gles2.h"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		E98CE2CEDA4087F8E17CFB24 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		4BEC26BE14864669FD7A011A /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1A4BA0E89DFA322F53098B76 /* libnode-gles2-osx.a */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A1E5B1B77F9D8F9F02758D70 = {
+			isa = PBXGroup;
+			children = (
+				F2FD61B1CA7FB9EA6353EAA9 /* Source */,
+				4BEC26BE14864669FD7A011A /* Products */,
+				FEAEC67F7F75087DF6E3D372 /* Build */,
+			);
+			sourceTree = "<group>";
+		};
+		F2FD61B1CA7FB9EA6353EAA9 /* Source */ = {
+			isa = PBXGroup;
+			children = (
+				7FCD7CFAB0D3A9C68049610E /* node-gles2.cc */,
+				BEDBAF1E12F83D5D58B9B30C /* node-gles2.h */,
+			);
+			name = Source;
+			sourceTree = "<group>";
+		};
+		FEAEC67F7F75087DF6E3D372 /* Build */ = {
+			isa = PBXGroup;
+			children = (
+				29420497326D2C8C2D2B66E9 /* node-gles2.gyp */,
+			);
+			name = Build;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		37A7EA0B8A579C81AF49EB0D /* libnode-gles2-osx */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5B3CF305882F92480D60895A /* Build configuration list for PBXNativeTarget "libnode-gles2-osx" */;
+			buildPhases = (
+				98FA71CBD8034D2DC4067069 /* Sources */,
+				E98CE2CEDA4087F8E17CFB24 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "libnode-gles2-osx";
+			productName = "node-gles2-osx";
+			productReference = 1A4BA0E89DFA322F53098B76 /* libnode-gles2-osx.a */;
+			productType = "com.apple.product-type.library.static";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B86DAD86CDB602D265A50760 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+			};
+			buildConfigurationList = 3BF516F859B3122C668C938B /* Build configuration list for PBXProject "node-gles2" */;
+			compatibilityVersion = "Xcode 3.2";
+			hasScannedForEncodings = 1;
+			mainGroup = A1E5B1B77F9D8F9F02758D70;
+			projectDirPath = ..;
+			projectRoot = "";
+			targets = (
+				37A7EA0B8A579C81AF49EB0D /* libnode-gles2-osx */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		98FA71CBD8034D2DC4067069 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				095AE9C6970B4B1C2FD6B975 /* node-gles2.cc in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		44654BA248F00FF0ED1DDDA6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				EXECUTABLE_PREFIX = lib;
+				GCC_CW_ASM_SYNTAX = NO;
+				GCC_C_LANGUAGE_STANDARD = c99;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_ENABLE_CPP_EXCEPTIONS = NO;
+				GCC_ENABLE_CPP_RTTI = NO;
+				GCC_ENABLE_PASCAL_STRINGS = NO;
+				GCC_INLINES_ARE_PRIVATE_EXTERN = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					__POSIX__,
+					_LARGEFILE_SOURCE,
+					_LARGEFILE64_SOURCE,
+					"_FILE_OFFSET_BITS=64",
+					"_DARWIN_USE_64_BIT_INODE=1",
+					"NODE_WANT_INTERNALS=1",
+					_DEBUG,
+					"DEBUG=1",
+				);
+				GCC_SYMBOLS_PRIVATE_EXTERN = YES;
+				GCC_THREADSAFE_STATICS = NO;
+				GCC_WARN_NON_VIRTUAL_DESTRUCTOR = YES;
+				HEADER_SEARCH_PATHS = (
+					.,
+					../nan,
+					../../node/src,
+					../../node/deps/uv/include,
+					../../node/deps/v8/include,
+					"../../node/deps/debugger-agent/include",
+					../../node/deps/cares/include,
+				);
+				"OTHER_CFLAGS[arch=arm64]" = "-marm";
+				"OTHER_CFLAGS[arch=armv7]" = "-marm";
+				"OTHER_CFLAGS[arch=armv7s]" = "-marm";
+				PREBINDING = NO;
+				PRODUCT_NAME = "node-gles2-osx";
+				WARNING_CFLAGS = (
+					"-Wall",
+					"-Wendif-labels",
+					"-W",
+					"-Wno-unused-parameter",
+				);
+			};
+			name = Debug;
+		};
+		857DC5993C7B465668D266BF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD_32_64_BIT)";
+				INTERMEDIATE_DIR = "$(PROJECT_DERIVED_FILE_DIR)/$(CONFIGURATION)";
+				SDKROOT = macosx;
+				SHARED_INTERMEDIATE_DIR = "$(SYMROOT)/DerivedSources/$(CONFIGURATION)";
+				USE_HEADERMAP = NO;
+			};
+			name = Release;
+		};
+		862FC765AD669C92BFBF8AA0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				EXECUTABLE_PREFIX = lib;
+				GCC_CW_ASM_SYNTAX = NO;
+				GCC_C_LANGUAGE_STANDARD = c99;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_ENABLE_CPP_EXCEPTIONS = NO;
+				GCC_ENABLE_CPP_RTTI = NO;
+				GCC_ENABLE_PASCAL_STRINGS = NO;
+				GCC_INLINES_ARE_PRIVATE_EXTERN = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					__POSIX__,
+					_LARGEFILE_SOURCE,
+					_LARGEFILE64_SOURCE,
+					"_FILE_OFFSET_BITS=64",
+					"_DARWIN_USE_64_BIT_INODE=1",
+					"NODE_WANT_INTERNALS=1",
+					"NDEBUG=1",
+				);
+				GCC_SYMBOLS_PRIVATE_EXTERN = YES;
+				GCC_THREADSAFE_STATICS = NO;
+				GCC_WARN_NON_VIRTUAL_DESTRUCTOR = YES;
+				HEADER_SEARCH_PATHS = (
+					.,
+					../nan,
+					../../node/src,
+					../../node/deps/uv/include,
+					../../node/deps/v8/include,
+					"../../node/deps/debugger-agent/include",
+					../../node/deps/cares/include,
+				);
+				"OTHER_CFLAGS[arch=arm64]" = "-marm";
+				"OTHER_CFLAGS[arch=armv7]" = "-marm";
+				"OTHER_CFLAGS[arch=armv7s]" = "-marm";
+				PREBINDING = NO;
+				PRODUCT_NAME = "node-gles2-osx";
+				WARNING_CFLAGS = (
+					"-Wall",
+					"-Wendif-labels",
+					"-W",
+					"-Wno-unused-parameter",
+				);
+			};
+			name = Release;
+		};
+		C3CD906C1A26550CEEB7416D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD_32_64_BIT)";
+				INTERMEDIATE_DIR = "$(PROJECT_DERIVED_FILE_DIR)/$(CONFIGURATION)";
+				SDKROOT = macosx;
+				SHARED_INTERMEDIATE_DIR = "$(SYMROOT)/DerivedSources/$(CONFIGURATION)";
+				USE_HEADERMAP = NO;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3BF516F859B3122C668C938B /* Build configuration list for PBXProject "node-gles2" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C3CD906C1A26550CEEB7416D /* Debug */,
+				857DC5993C7B465668D266BF /* Release */,
+			);
+			defaultConfigurationIsVisible = 1;
+			defaultConfigurationName = Debug;
+		};
+		5B3CF305882F92480D60895A /* Build configuration list for PBXNativeTarget "libnode-gles2-osx" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				44654BA248F00FF0ED1DDDA6 /* Debug */,
+				862FC765AD669C92BFBF8AA0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 1;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = B86DAD86CDB602D265A50760 /* Project object */;
+}

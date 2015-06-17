@@ -1,0 +1,30 @@
+{
+  "name": "flyover-node-gles2",
+  "version": "0.0.0",
+  "author": "Flyover Games",
+  "homepage": "http://flyovergames.com",
+  "description": "Node OpenGL ES2 Package",
+  "contributors": [
+    "Isaac Burns <isaacburns@gmail.com>"
+  ],
+  "main": "node-gles2.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/flyover/node-gles2.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "nan": "^1.4"
+  },
+  "scripts": {
+    "install": "node-gyp rebuild"
+  },
+  "gypfile": true,
+  "bugs": {
+    "url": "https://github.com/flyover/node-gles2/issues"
+  },
+  "keywords": [
+    "OpenGL",
+    "ES2"
+  ]
+}
