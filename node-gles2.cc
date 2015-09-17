@@ -26,9 +26,6 @@
 
 #include "node-gles2.h"
 
-#include <v8.h>
-#include <node.h>
-
 #include <stdlib.h> // malloc, free
 #include <string.h> // strdup
 
@@ -41,56 +38,156 @@
 #define printf(...) __android_log_print(ANDROID_LOG_INFO, "printf", __VA_ARGS__)
 #endif
 
-// macros for modules
+#define countof(_a) (sizeof(_a)/sizeof((_a)[0]))
 
-#define MODULE_CONSTANT(target, constant) \
-	(target)->ForceSet(NanNew<v8::String>(#constant), NanNew(constant), static_cast<v8::PropertyAttribute>(v8::ReadOnly|v8::DontDelete))
+// nan extensions
 
-#define MODULE_CONSTANT_VALUE(target, constant, value) \
-	(target)->ForceSet(NanNew<v8::String>(#constant), NanNew(value), static_cast<v8::PropertyAttribute>(v8::ReadOnly|v8::DontDelete))
+#define NANX_STRING(STRING) Nan::New<v8::String>(STRING).ToLocalChecked()
+#define NANX_SYMBOL(SYMBOL) Nan::New<v8::String>(SYMBOL).ToLocalChecked()
 
-#define MODULE_CONSTANT_NUMBER(target, constant) \
-	(target)->ForceSet(NanNew<v8::String>(#constant), NanNew<v8::Number>(constant), static_cast<v8::PropertyAttribute>(v8::ReadOnly|v8::DontDelete))
+#define NANX_CONSTANT(TARGET, CONSTANT) Nan::Set(TARGET, NANX_SYMBOL(#CONSTANT), Nan::New(CONSTANT))
+#define NANX_CONSTANT_VALUE(TARGET, CONSTANT, VALUE) Nan::Set(TARGET, NANX_SYMBOL(#CONSTANT), Nan::New(VALUE))
 
-#define MODULE_CONSTANT_STRING(target, constant) \
-	(target)->ForceSet(NanNew<v8::String>(#constant), NanNew<v8::String>(constant), static_cast<v8::PropertyAttribute>(v8::ReadOnly|v8::DontDelete))
+#define NANX_CONSTANT_STRING(TARGET, CONSTANT) Nan::Set(TARGET, NANX_SYMBOL(#CONSTANT), NANX_STRING(CONSTANT))
+#define NANX_CONSTANT_STRING_VALUE(TARGET, CONSTANT, VALUE) Nan::Set(TARGET, NANX_SYMBOL(#CONSTANT), NANX_STRING(VALUE))
 
-#define MODULE_EXPORT_APPLY(target, name) NODE_SET_METHOD(target, #name, _native_##name)
-#define MODULE_EXPORT_DECLARE(name) static NAN_METHOD(_native_##name);
-#define MODULE_EXPORT_IMPLEMENT(name) static NAN_METHOD(_native_##name)
-#define MODULE_EXPORT_IMPLEMENT_TODO(name) static NAN_METHOD(_native_##name) { return NanThrowError(NanNew<v8::String>("not implemented: " #name)); }
+#define NANX_EXPORT_APPLY(OBJECT, NAME) Nan::Export(OBJECT, #NAME, _export_##NAME)
+#define NANX_EXPORT(NAME) static NAN_METHOD(_export_##NAME)
 
-#define ARG_INT32(i)	args[i]->Int32Value()
-#define ARG_UINT32(i)	args[i]->Uint32Value()
-#define ARG_BOOLEAN(i)	args[i]->BooleanValue()
-#define ARG_NUMBER(i)	args[i]->NumberValue()
-#define ARG_STRING(i)	v8::Handle<v8::String>::Cast(args[i])
-#define ARG_OBJECT(i)	v8::Handle<v8::Object>::Cast(args[i])
-#define ARG_ARRAY(i)	v8::Handle<v8::Array>::Cast(args[i])
+#define NANX_METHOD_APPLY(OBJECT_TEMPLATE, NAME) Nan::SetMethod(OBJECT_TEMPLATE, #NAME, _method_##NAME);
+#define NANX_METHOD(NAME) static NAN_METHOD(_method_##NAME)
 
-void* GetTypedArray(v8::Handle<v8::Object> object, int length = 0)
+#define NANX_MEMBER_APPLY(OBJECT_TEMPLATE, NAME) Nan::SetAccessor(OBJECT_TEMPLATE, NANX_SYMBOL(#NAME), _get_##NAME, _set_##NAME);
+#define NANX_MEMBER_APPLY_GET(OBJECT_TEMPLATE, NAME) Nan::SetAccessor(OBJECT_TEMPLATE, NANX_SYMBOL(#NAME), _get_##NAME, NULL); // get only
+#define NANX_MEMBER_APPLY_SET(OBJECT_TEMPLATE, NAME) Nan::SetAccessor(OBJECT_TEMPLATE, NANX_SYMBOL(#NAME), NULL, _set_##NAME); // set only
+
+#define NANX_MEMBER_VALUE(NAME) NANX_MEMBER_VALUE_GET(NAME) NANX_MEMBER_VALUE_SET(NAME)
+#define NANX_MEMBER_VALUE_GET(NAME) static NAN_GETTER(_get_##NAME) { Unwrap(info.This())->SyncPull(); info.GetReturnValue().Set(Nan::New<v8::Value>(Unwrap(info.This())->m_wrap_##NAME)); }
+#define NANX_MEMBER_VALUE_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Value>()); Unwrap(info.This())->SyncPush(); info.GetReturnValue().Set(value); }
+
+#define NANX_MEMBER_BOOLEAN(TYPE, NAME) NANX_MEMBER_BOOLEAN_GET(TYPE, NAME) NANX_MEMBER_BOOLEAN_SET(TYPE, NAME)
+#define NANX_MEMBER_BOOLEAN_GET(TYPE, NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Boolean>(static_cast<bool>(Peek(info.This())->NAME))); }
+#define NANX_MEMBER_BOOLEAN_SET(TYPE, NAME) static NAN_SETTER(_set_##NAME) { Peek(info.This())->NAME = static_cast<TYPE>(value->BooleanValue()); }
+
+#define NANX_MEMBER_NUMBER(TYPE, NAME) NANX_MEMBER_NUMBER_GET(TYPE, NAME) NANX_MEMBER_NUMBER_SET(TYPE, NAME)
+#define NANX_MEMBER_NUMBER_GET(TYPE, NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Number>(static_cast<double>(Peek(info.This())->NAME))); }
+#define NANX_MEMBER_NUMBER_SET(TYPE, NAME) static NAN_SETTER(_set_##NAME) { Peek(info.This())->NAME = static_cast<TYPE>(value->NumberValue()); }
+
+#define NANX_MEMBER_INTEGER(TYPE, NAME) NANX_MEMBER_INTEGER_GET(TYPE, NAME) NANX_MEMBER_INTEGER_SET(TYPE, NAME)
+#define NANX_MEMBER_INTEGER_GET(TYPE, NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Int32>(static_cast<int32_t>(Peek(info.This())->NAME))); }
+#define NANX_MEMBER_INTEGER_SET(TYPE, NAME) static NAN_SETTER(_set_##NAME) { Peek(info.This())->NAME = static_cast<TYPE>(value->IntegerValue()); }
+
+#define NANX_MEMBER_INT32(TYPE, NAME) NANX_MEMBER_INT32_GET(TYPE, NAME) NANX_MEMBER_INT32_SET(TYPE, NAME)
+#define NANX_MEMBER_INT32_GET(TYPE, NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Int32>(static_cast<int32_t>(Peek(info.This())->NAME))); }
+#define NANX_MEMBER_INT32_SET(TYPE, NAME) static NAN_SETTER(_set_##NAME) { Peek(info.This())->NAME = static_cast<TYPE>(value->Int32Value()); }
+
+#define NANX_MEMBER_UINT32(TYPE, NAME) NANX_MEMBER_UINT32_GET(TYPE, NAME) NANX_MEMBER_UINT32_SET(TYPE, NAME)
+#define NANX_MEMBER_UINT32_GET(TYPE, NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Uint32>(static_cast<uint32_t>(Peek(info.This())->NAME))); }
+#define NANX_MEMBER_UINT32_SET(TYPE, NAME) static NAN_SETTER(_set_##NAME) { Peek(info.This())->NAME = static_cast<TYPE>(value->Uint32Value()); }
+
+#define NANX_MEMBER_STRING(NAME) NANX_MEMBER_STRING_GET(NAME) NANX_MEMBER_STRING_SET(NAME)
+#define NANX_MEMBER_STRING_GET(NAME) static NAN_GETTER(_get_##NAME) { Unwrap(info.This())->SyncPull(); info.GetReturnValue().Set(Nan::New<v8::String>(Unwrap(info.This())->m_wrap_##NAME)); }
+#define NANX_MEMBER_STRING_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::String>()); Unwrap(info.This())->SyncPush(); info.GetReturnValue().Set(value); }
+
+#define NANX_MEMBER_OBJECT(NAME) NANX_MEMBER_OBJECT_GET(NAME) NANX_MEMBER_OBJECT_SET(NAME)
+#define NANX_MEMBER_OBJECT_GET(NAME) static NAN_GETTER(_get_##NAME) { Unwrap(info.This())->SyncPull(); info.GetReturnValue().Set(Nan::New<v8::Object>(Unwrap(info.This())->m_wrap_##NAME)); }
+#define NANX_MEMBER_OBJECT_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Object>()); Unwrap(info.This())->SyncPush(); info.GetReturnValue().Set(value); }
+
+#define NANX_MEMBER_ARRAY(NAME) NANX_MEMBER_ARRAY_GET(NAME) NANX_MEMBER_ARRAY_SET(NAME)
+#define NANX_MEMBER_ARRAY_GET(NAME) static NAN_GETTER(_get_##NAME) { Unwrap(info.This())->SyncPull(); info.GetReturnValue().Set(Nan::New<v8::Array>(Unwrap(info.This())->m_wrap_##NAME)); }
+#define NANX_MEMBER_ARRAY_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Array>()); Unwrap(info.This())->SyncPush(); info.GetReturnValue().Set(value); }
+
+#define NANX_GLboolean(value)	static_cast<GLboolean>((value)->BooleanValue())		//	GLboolean	1+		A boolean value, either GL_TRUE or GL_FALSE
+#define NANX_GLbyte(value)		static_cast<GLbyte>((value)->Int32Value())			//	GLbyte		8		Signed, 2's complement binary integer								GL_BYTE
+#define NANX_GLubyte(value)		static_cast<GLubyte>((value)->Uint32Value())		//	GLubyte		8		Unsigned binary integer												GL_UNSIGNED_BYTE
+#define NANX_GLshort(value)		static_cast<GLshort>((value)->Int32Value())			//	GLshort		16		Signed, 2's complement binary integer								GL_SHORT
+#define NANX_GLushort(value)	static_cast<GLushort>((value)->Uint32Value())		//	GLushort	16		Unsigned binary integer												GL_UNSIGNED_SHORT
+#define NANX_GLint(value)		static_cast<GLint>((value)->Int32Value())			//	GLint		32		Signed, 2's complement binary integer								GL_INT
+#define NANX_GLuint(value)		static_cast<GLuint>((value)->Uint32Value())			//	GLuint		32		Unsigned binary integer												GL_UNSIGNED_INT
+#define NANX_GLfixed(value)		static_cast<GLfixed>((value)->Int32Value())			//	GLfixed		32		Signed, 2's complement 16.16 integer								GL_FIXED
+#define NANX_GLint64(value)		static_cast<GLint64>((value)->Int32Value())			//	GLint64		64		Signed, 2's complement binary integer
+#define NANX_GLuint64(value)	static_cast<GLuint64>((value)->Uint32Value())		//	GLuint64	64		Unsigned binary integer
+#define NANX_GLsizei(value)		static_cast<GLsizei>((value)->Uint32Value())		//	GLsizei		32		A non-negative binary integer, for sizes.
+#define NANX_GLenum(value)		static_cast<GLenum>((value)->Uint32Value())			//	GLenum		32		An OpenGL enumerator value
+#define NANX_GLintptr(value)	static_cast<GLintptr>((value)->IntegerValue())		//	GLintptr	ptrbits	Signed, 2's complement binary integer
+#define NANX_GLsizeiptr(value)	static_cast<GLsizeiptr>((value)->IntegerValue())	//	GLsizeiptr	ptrbits	Non-negative binary integer size, for pointer offsets and ranges
+#define NANX_GLsync(value)		static_cast<GLsync>((value)->IntegerValue())		//	GLsync		ptrbits	Sync Object handle
+#define NANX_GLbitfield(value)	static_cast<GLbitfield>((value)->Uint32Value())		//	GLbitfield	32		A bitfield value
+#define NANX_GLhalf(value)		static_cast<GLhalf>((value)->NumberValue())			//	GLhalf		16		An IEEE-754 floating-point value									GL_HALF_FLOAT
+#define NANX_GLfloat(value)		static_cast<GLfloat>((value)->NumberValue())		//	GLfloat		32		An IEEE-754 floating-point value									GL_FLOAT
+#define NANX_GLclampf(value)	static_cast<GLclampf>((value)->NumberValue())		//	GLclampf	32		An IEEE-754 floating-point value, clamped to the range [0,1]
+#define NANX_GLdouble(value)	static_cast<GLdouble>((value)->NumberValue())		//	GLdouble	64		An IEEE-754 floating-point value									GL_DOUBLE
+#define NANX_GLclampd(value)	static_cast<GLclampd>((value)->NumberValue())		//	GLclampd	64		An IEEE-754 floating-point value, clamped to the range [0,1]
+
+#if NODE_VERSION_AT_LEAST(4, 0, 0)
+
+void* GetArrayBufferViewData(v8::Local<v8::Value> value, size_t byte_length = 0)
 {
-	if (object->IsNull())
+	if (value->IsNull()) { return NULL; }
+	assert(value->IsArrayBufferView());
+	v8::Local<v8::ArrayBufferView> array_buffer_view = value.As<v8::ArrayBufferView>();
+	if (!array_buffer_view->HasBuffer())
 	{
-		return NULL;
+		value.As<v8::Object>()->Get(NANX_SYMBOL("buffer"));
+		assert(array_buffer_view->HasBuffer());
 	}
+	v8::Local<v8::ArrayBuffer> array_buffer = array_buffer_view->Buffer();
+	assert((byte_length == 0) || (byte_length == array_buffer_view->ByteLength()));
+	void* data = array_buffer->GetContents().Data();
+	size_t byte_offset = array_buffer_view->ByteOffset();
+	return static_cast<void*>(static_cast<char*>(data) + byte_offset);
+}
+
+template <typename TYPE>
+void* GetTypedArrayData(v8::Local<v8::Value> value, size_t length = 0)
+{
+	if (value->IsNull()) { return NULL; }
+	assert(value->IsTypedArray());
+	v8::Local<v8::TypedArray> typed_array = value.As<v8::TypedArray>();
+	if (!typed_array->HasBuffer())
+	{
+		value.As<v8::Object>()->Get(NANX_SYMBOL("buffer"));
+		assert(typed_array->HasBuffer());
+	}
+	v8::Local<v8::ArrayBuffer> array_buffer = typed_array->Buffer();
+	assert((length == 0) || (length == typed_array->Length()));
+	void* data = array_buffer->GetContents().Data();
+	size_t byte_offset = typed_array->ByteOffset();
+	return static_cast<void*>(static_cast<char*>(data) + byte_offset);
+}
+
+  int8_t* GetInt8ArrayData   (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<  int8_t*>(GetTypedArrayData<v8::Int8Array   >(value, length)); }
+ uint8_t* GetUint8ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< uint8_t*>(GetTypedArrayData<v8::Uint8Array  >(value, length)); }
+ int16_t* GetInt16ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< int16_t*>(GetTypedArrayData<v8::Int16Array  >(value, length)); }
+uint16_t* GetUint16ArrayData (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<uint16_t*>(GetTypedArrayData<v8::Uint16Array >(value, length)); }
+ int32_t* GetInt32ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< int32_t*>(GetTypedArrayData<v8::Int32Array  >(value, length)); }
+uint32_t* GetUint32ArrayData (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<uint32_t*>(GetTypedArrayData<v8::Uint32Array >(value, length)); }
+   float* GetFloat32ArrayData(v8::Local<v8::Value> value, size_t length = 0) { return static_cast<   float*>(GetTypedArrayData<v8::Float32Array>(value, length)); }
+  double* GetFloat64ArrayData(v8::Local<v8::Value> value, size_t length = 0) { return static_cast<  double*>(GetTypedArrayData<v8::Float64Array>(value, length)); }
+
+#else
+
+void* GetArrayBufferViewData(v8::Local<v8::Value> value, size_t byte_length = 0)
+{
+	if (value->IsNull()) { return NULL; }
+	assert(value->IsObject());
+	v8::Local<v8::Object> object = value.As<v8::Object>();
 	#if NODE_VERSION_AT_LEAST(0, 12, 0)
-	object->Get(NanNew<v8::String>("buffer"));
+	object->Get(NANX_SYMBOL("buffer"));
 	#endif
 	assert(object->HasIndexedPropertiesInExternalArrayData());
-	assert((length == 0) || (length <= object->GetIndexedPropertiesExternalArrayDataLength()));
+	assert((byte_length == 0) || (byte_length <= object->GetIndexedPropertiesExternalArrayDataLength()));
 	return object->GetIndexedPropertiesExternalArrayData();
 }
 
 template <v8::ExternalArrayType TYPE>
-void* GetTypedArray(v8::Handle<v8::Object> object, int length = 0)
+void* GetTypedArrayData(v8::Local<v8::Value> value, size_t length = 0)
 {
-	if (object->IsNull())
-	{
-		return NULL;
-	}
+	if (value->IsNull()) { return NULL; }
+	assert(value->IsObject());
+	v8::Local<v8::Object> object = value.As<v8::Object>();
 	#if NODE_VERSION_AT_LEAST(0, 12, 0)
-	object->Get(NanNew<v8::String>("buffer"));
+	object->Get(NANX_SYMBOL("buffer"));
 	#endif
 	assert(object->HasIndexedPropertiesInExternalArrayData());
 	assert((length == 0) || (length <= object->GetIndexedPropertiesExternalArrayDataLength()));
@@ -98,692 +195,579 @@ void* GetTypedArray(v8::Handle<v8::Object> object, int length = 0)
 	return object->GetIndexedPropertiesExternalArrayData();
 }
 
-using namespace v8;
+  int8_t* GetInt8ArrayData   (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<  int8_t*>(GetTypedArrayData<v8::kExternalInt8Array   >(value, length)); }
+ uint8_t* GetUint8ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< uint8_t*>(GetTypedArrayData<v8::kExternalUint8Array  >(value, length)); }
+ int16_t* GetInt16ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< int16_t*>(GetTypedArrayData<v8::kExternalInt16Array  >(value, length)); }
+uint16_t* GetUint16ArrayData (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<uint16_t*>(GetTypedArrayData<v8::kExternalUint16Array >(value, length)); }
+ int32_t* GetInt32ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< int32_t*>(GetTypedArrayData<v8::kExternalInt32Array  >(value, length)); }
+uint32_t* GetUint32ArrayData (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<uint32_t*>(GetTypedArrayData<v8::kExternalUint32Array >(value, length)); }
+   float* GetFloat32ArrayData(v8::Local<v8::Value> value, size_t length = 0) { return static_cast<   float*>(GetTypedArrayData<v8::kExternalFloat32Array>(value, length)); }
+  double* GetFloat64ArrayData(v8::Local<v8::Value> value, size_t length = 0) { return static_cast<  double*>(GetTypedArrayData<v8::kExternalFloat64Array>(value, length)); }
+
+#endif
 
 namespace node_gles2 {
 
 #ifdef HAVE_OPENGLES2
 
 //void glActiveTexture(GLenum texture);
-MODULE_EXPORT_IMPLEMENT(glActiveTexture)
+NANX_EXPORT(glActiveTexture)
 {
-	NanScope();
-	GLenum texture = (GLenum) ARG_UINT32(0);
+	GLenum texture = NANX_GLenum(info[0]);
 	::glActiveTexture(texture);
-	NanReturnUndefined();
 }
 
 //void glAttachShader(GLuint program, GLuint shader);
-MODULE_EXPORT_IMPLEMENT(glAttachShader)
+NANX_EXPORT(glAttachShader)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
-	GLuint shader = ARG_UINT32(1);
+	GLuint program = NANX_GLuint(info[0]);
+	GLuint shader = NANX_GLuint(info[1]);
 	::glAttachShader(program, shader);
-	NanReturnUndefined();
 }
 
 //void glBindAttribLocation(GLuint program, GLuint index, const GLchar* name);
-MODULE_EXPORT_IMPLEMENT(glBindAttribLocation)
+NANX_EXPORT(glBindAttribLocation)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
-	GLuint index = ARG_UINT32(1);
-	Handle<String> name = ARG_STRING(2);
-	::glBindAttribLocation(program, index, *String::Utf8Value(name));
-	NanReturnUndefined();
+	GLuint program = NANX_GLuint(info[0]);
+	GLuint index = NANX_GLuint(info[1]);
+	v8::Local<v8::String> name = v8::Local<v8::String>::Cast(info[2]);
+	::glBindAttribLocation(program, index, *v8::String::Utf8Value(name));
 }
 
 //void glBindBuffer(GLenum target, GLuint buffer);
-MODULE_EXPORT_IMPLEMENT(glBindBuffer)
+NANX_EXPORT(glBindBuffer)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLuint buffer = ARG_UINT32(1);
+	GLenum target = NANX_GLenum(info[0]);
+	GLuint buffer = NANX_GLuint(info[1]);
 	::glBindBuffer(target, buffer);
-	NanReturnUndefined();
 }
 
 //void glBindFramebuffer(GLenum target, GLuint framebuffer);
-MODULE_EXPORT_IMPLEMENT(glBindFramebuffer)
+NANX_EXPORT(glBindFramebuffer)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLuint framebuffer = ARG_UINT32(1);
+	GLenum target = NANX_GLenum(info[0]);
+	GLuint framebuffer = NANX_GLuint(info[1]);
 	::glBindFramebuffer(target, framebuffer);
-	NanReturnUndefined();
 }
 
 //void glBindRenderbuffer(GLenum target, GLuint renderbuffer);
-MODULE_EXPORT_IMPLEMENT(glBindRenderbuffer)
+NANX_EXPORT(glBindRenderbuffer)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLuint renderbuffer = ARG_UINT32(1);
+	GLenum target = NANX_GLenum(info[0]);
+	GLuint renderbuffer = NANX_GLuint(info[1]);
 	::glBindRenderbuffer(target, renderbuffer);
-	NanReturnUndefined();
 }
 
 //void glBindTexture(GLenum target, GLuint texture);
-MODULE_EXPORT_IMPLEMENT(glBindTexture)
+NANX_EXPORT(glBindTexture)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLuint texture = ARG_UINT32(1);
+	GLenum target = NANX_GLenum(info[0]);
+	GLuint texture = NANX_GLuint(info[1]);
 	::glBindTexture(target, texture);
-	NanReturnUndefined();
 }
 
 //void glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
-MODULE_EXPORT_IMPLEMENT(glBlendColor)
+NANX_EXPORT(glBlendColor)
 {
-	NanScope();
-	GLclampf red = (GLclampf) ARG_NUMBER(0);
-	GLclampf green = (GLclampf) ARG_NUMBER(1);
-	GLclampf blue = (GLclampf) ARG_NUMBER(2);
-	GLclampf alpha = (GLclampf) ARG_NUMBER(3);
+	GLclampf red = NANX_GLclampf(info[0]);
+	GLclampf green = NANX_GLclampf(info[1]);
+	GLclampf blue = NANX_GLclampf(info[2]);
+	GLclampf alpha = NANX_GLclampf(info[3]);
 	::glBlendColor(red, green, blue, alpha);
-	NanReturnUndefined();
 }
 
 //void glBlendEquation(GLenum mode);
-MODULE_EXPORT_IMPLEMENT(glBlendEquation)
+NANX_EXPORT(glBlendEquation)
 {
-	NanScope();
-	GLenum mode = ARG_UINT32(0);
+	GLenum mode = NANX_GLenum(info[0]);
 	::glBlendEquation(mode);
-	NanReturnUndefined();
 }
 
 //void glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha);
-MODULE_EXPORT_IMPLEMENT(glBlendEquationSeparate)
+NANX_EXPORT(glBlendEquationSeparate)
 {
-	NanScope();
-	GLenum modeRGB = ARG_UINT32(0);
-	GLenum modeAlpha = ARG_UINT32(1);
+	GLenum modeRGB = NANX_GLenum(info[0]);
+	GLenum modeAlpha = NANX_GLenum(info[1]);
 	::glBlendEquationSeparate(modeRGB, modeAlpha);
-	NanReturnUndefined();
 }
 
 //void glBlendFunc(GLenum sfactor, GLenum dfactor);
-MODULE_EXPORT_IMPLEMENT(glBlendFunc)
+NANX_EXPORT(glBlendFunc)
 {
-	NanScope();
-	GLenum sfactor = ARG_UINT32(0);
-	GLenum dfactor = ARG_UINT32(1);
+	GLenum sfactor = NANX_GLenum(info[0]);
+	GLenum dfactor = NANX_GLenum(info[1]);
 	::glBlendFunc(sfactor, dfactor);
-	NanReturnUndefined();
 }
 
 //void glBlendFuncSeparate(GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha);
-MODULE_EXPORT_IMPLEMENT(glBlendFuncSeparate)
+NANX_EXPORT(glBlendFuncSeparate)
 {
-	NanScope();
-	GLenum srcRGB = ARG_UINT32(0);
-	GLenum dstRGB = ARG_UINT32(1);
-	GLenum srcAlpha = ARG_UINT32(2);
-	GLenum dstAlpha = ARG_UINT32(3);
+	GLenum srcRGB = NANX_GLenum(info[0]);
+	GLenum dstRGB = NANX_GLenum(info[1]);
+	GLenum srcAlpha = NANX_GLenum(info[2]);
+	GLenum dstAlpha = NANX_GLenum(info[3]);
 	::glBlendFuncSeparate(srcRGB, dstRGB, srcAlpha, dstAlpha);
-	NanReturnUndefined();
 }
 
 //void glBufferData(GLenum target, GLsizeiptr size, const GLvoid* data, GLenum usage);
-MODULE_EXPORT_IMPLEMENT(glBufferData)
+NANX_EXPORT(glBufferData)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLsizeiptr size = ARG_INT32(1);
-	const GLvoid* data = GetTypedArray(ARG_OBJECT(2)); // TODO: length
-	GLenum usage = ARG_UINT32(3);
+	GLenum target = NANX_GLenum(info[0]);
+	GLsizeiptr size = NANX_GLsizeiptr(info[1]);
+	const GLvoid* data = GetArrayBufferViewData(info[2], size);
+	GLenum usage = NANX_GLenum(info[3]);
 	::glBufferData(target, size, data, usage);
-	NanReturnUndefined();
 }
 
 //void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid* data);
-MODULE_EXPORT_IMPLEMENT(glBufferSubData)
+NANX_EXPORT(glBufferSubData)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLintptr offset = ARG_INT32(1);
-	GLsizeiptr size = ARG_INT32(2);
-	const GLvoid* data = GetTypedArray(ARG_OBJECT(3)); // TODO: length
+	GLenum target = NANX_GLenum(info[0]);
+	GLintptr offset = NANX_GLintptr(info[1]);
+	GLsizeiptr size = NANX_GLsizeiptr(info[2]);
+	const GLvoid* data = GetArrayBufferViewData(info[3], size);
 	::glBufferSubData(target, offset, size, data);
-	NanReturnUndefined();
 }
 
 //GLenum glCheckFramebufferStatus(GLenum target);
-MODULE_EXPORT_IMPLEMENT(glCheckFramebufferStatus)
+NANX_EXPORT(glCheckFramebufferStatus)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
+	GLenum target = NANX_GLenum(info[0]);
 	GLenum status = ::glCheckFramebufferStatus(target);
-	NanReturnValue(NanNew(status));
+	info.GetReturnValue().Set(Nan::New(status));
 }
 
 //void glClear(GLbitfield mask);
-MODULE_EXPORT_IMPLEMENT(glClear)
+NANX_EXPORT(glClear)
 {
-	NanScope();
-	GLbitfield mask = ARG_UINT32(0);
+	GLbitfield mask = NANX_GLbitfield(info[0]);
 	::glClear(mask);
-	NanReturnUndefined();
 }
 
 //void glClearColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
-MODULE_EXPORT_IMPLEMENT(glClearColor)
+NANX_EXPORT(glClearColor)
 {
-	NanScope();
-	GLclampf red = (GLclampf) ARG_NUMBER(0);
-	GLclampf green = (GLclampf) ARG_NUMBER(1);
-	GLclampf blue = (GLclampf) ARG_NUMBER(2);
-	GLclampf alpha = (GLclampf) ARG_NUMBER(3);
+	GLclampf red = NANX_GLclampf(info[0]);
+	GLclampf green = NANX_GLclampf(info[1]);
+	GLclampf blue = NANX_GLclampf(info[2]);
+	GLclampf alpha = NANX_GLclampf(info[3]);
 	::glClearColor(red, green, blue, alpha);
-	NanReturnUndefined();
 }
 
 //void glClearDepthf(GLclampf depth);
-MODULE_EXPORT_IMPLEMENT(glClearDepthf)
+NANX_EXPORT(glClearDepthf)
 {
-	NanScope();
-	GLclampf depth = (GLclampf) ARG_NUMBER(0);
+	GLclampf depth = NANX_GLclampf(info[0]);
 	::glClearDepthf(depth);
-	NanReturnUndefined();
 }
 
 //void glClearStencil(GLint s);
-MODULE_EXPORT_IMPLEMENT(glClearStencil)
+NANX_EXPORT(glClearStencil)
 {
-	NanScope();
-	GLint s = ARG_INT32(0);
+	GLint s = NANX_GLint(info[0]);
 	::glClearStencil(s);
-	NanReturnUndefined();
 }
 
 //void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
-MODULE_EXPORT_IMPLEMENT(glColorMask)
+NANX_EXPORT(glColorMask)
 {
-	NanScope();
-	GLboolean red = ARG_BOOLEAN(0);
-	GLboolean green = ARG_BOOLEAN(1);
-	GLboolean blue = ARG_BOOLEAN(2);
-	GLboolean alpha = ARG_BOOLEAN(3);
+	GLboolean red = NANX_GLboolean(info[0]);
+	GLboolean green = NANX_GLboolean(info[1]);
+	GLboolean blue = NANX_GLboolean(info[2]);
+	GLboolean alpha = NANX_GLboolean(info[3]);
 	::glColorMask(red, green, blue, alpha);
-	NanReturnUndefined();
 }
 
 //void glCompileShader(GLuint shader);
-MODULE_EXPORT_IMPLEMENT(glCompileShader)
+NANX_EXPORT(glCompileShader)
 {
-	NanScope();
-	GLuint shader = ARG_UINT32(0);
+	GLuint shader = NANX_GLuint(info[0]);
 	::glCompileShader(shader);
-	NanReturnUndefined();
 }
 
 //void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const GLvoid* data);
-MODULE_EXPORT_IMPLEMENT(glCompressedTexImage2D)
+NANX_EXPORT(glCompressedTexImage2D)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLint level = ARG_INT32(1);
-	GLenum internalformat = ARG_UINT32(2);
-	GLsizei width = ARG_UINT32(3);
-	GLsizei height = ARG_UINT32(4);
-	GLint border = ARG_INT32(5);
-	GLsizei imageSize = ARG_UINT32(6);
-	const GLvoid* data = GetTypedArray(ARG_OBJECT(7), imageSize);
+	GLenum target = NANX_GLenum(info[0]);
+	GLint level = NANX_GLint(info[1]);
+	GLenum internalformat = NANX_GLenum(info[2]);
+	GLsizei width = NANX_GLsizei(info[3]);
+	GLsizei height = NANX_GLsizei(info[4]);
+	GLint border = NANX_GLint(info[5]);
+	GLsizei imageSize = NANX_GLsizei(info[6]);
+	const GLvoid* data = GetArrayBufferViewData(info[7], imageSize);
 	::glCompressedTexImage2D(target, level, internalformat, width, height, border, imageSize, data);
-	NanReturnUndefined();
 }
 
 //void glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const GLvoid* data);
-MODULE_EXPORT_IMPLEMENT(glCompressedTexSubImage2D)
+NANX_EXPORT(glCompressedTexSubImage2D)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLint level = ARG_INT32(1);
-	GLint xoffset = ARG_INT32(2);
-	GLint yoffset = ARG_INT32(3);
-	GLsizei width = ARG_UINT32(4);
-	GLsizei height = ARG_UINT32(5);
-	GLenum format = ARG_UINT32(6);
-	GLsizei imageSize = ARG_UINT32(7);
-	const GLvoid* data = GetTypedArray(ARG_OBJECT(8), imageSize);
+	GLenum target = NANX_GLenum(info[0]);
+	GLint level = NANX_GLint(info[1]);
+	GLint xoffset = NANX_GLint(info[2]);
+	GLint yoffset = NANX_GLint(info[3]);
+	GLsizei width = NANX_GLsizei(info[4]);
+	GLsizei height = NANX_GLsizei(info[5]);
+	GLenum format = NANX_GLenum(info[6]);
+	GLsizei imageSize = NANX_GLsizei(info[7]);
+	const GLvoid* data = GetArrayBufferViewData(info[8], imageSize);
 	::glCompressedTexSubImage2D(target, level, xoffset, yoffset, width, height, format, imageSize, data);
-	NanReturnUndefined();
 }
 
 //void glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border);
-MODULE_EXPORT_IMPLEMENT(glCopyTexImage2D)
+NANX_EXPORT(glCopyTexImage2D)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLint level = ARG_INT32(1);
-	GLenum internalformat = ARG_UINT32(2);
-	GLint x = ARG_INT32(3);
-	GLint y = ARG_INT32(4);
-	GLsizei width = ARG_UINT32(5);
-	GLsizei height = ARG_UINT32(6);
-	GLint border = ARG_INT32(7);
+	GLenum target = NANX_GLenum(info[0]);
+	GLint level = NANX_GLint(info[1]);
+	GLenum internalformat = NANX_GLenum(info[2]);
+	GLint x = NANX_GLint(info[3]);
+	GLint y = NANX_GLint(info[4]);
+	GLsizei width = NANX_GLsizei(info[5]);
+	GLsizei height = NANX_GLsizei(info[6]);
+	GLint border = NANX_GLint(info[7]);
 	::glCopyTexImage2D(target, level, internalformat, x, y, width, height, border);
-	NanReturnUndefined();
 }
 
 //void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height);
-MODULE_EXPORT_IMPLEMENT(glCopyTexSubImage2D)
+NANX_EXPORT(glCopyTexSubImage2D)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLint level = ARG_INT32(1);
-	GLint xoffset = ARG_INT32(2);
-	GLint yoffset = ARG_INT32(3);
-	GLint x = ARG_INT32(4);
-	GLint y = ARG_INT32(5);
-	GLsizei width = ARG_UINT32(6);
-	GLsizei height = ARG_UINT32(7);
+	GLenum target = NANX_GLenum(info[0]);
+	GLint level = NANX_GLint(info[1]);
+	GLint xoffset = NANX_GLint(info[2]);
+	GLint yoffset = NANX_GLint(info[3]);
+	GLint x = NANX_GLint(info[4]);
+	GLint y = NANX_GLint(info[5]);
+	GLsizei width = NANX_GLsizei(info[6]);
+	GLsizei height = NANX_GLsizei(info[7]);
 	::glCopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
-	NanReturnUndefined();
 }
 
 //GLuint glCreateProgram(void);
-MODULE_EXPORT_IMPLEMENT(glCreateProgram)
+NANX_EXPORT(glCreateProgram)
 {
-	NanScope();
 	GLuint program = ::glCreateProgram();
-	NanReturnValue(NanNew(program));
+	info.GetReturnValue().Set(Nan::New(program));
 }
 
 //GLuint glCreateShader(GLenum type);
-MODULE_EXPORT_IMPLEMENT(glCreateShader)
+NANX_EXPORT(glCreateShader)
 {
-	NanScope();
-	GLenum type = ARG_UINT32(0);
+	GLenum type = NANX_GLenum(info[0]);
 	GLuint shader = ::glCreateShader(type);
-	NanReturnValue(NanNew(shader));
+	info.GetReturnValue().Set(Nan::New(shader));
 }
 
 //void glCullFace(GLenum mode);
-MODULE_EXPORT_IMPLEMENT(glCullFace)
+NANX_EXPORT(glCullFace)
 {
-	NanScope();
-	GLenum mode = ARG_UINT32(0);
+	GLenum mode = NANX_GLenum(info[0]);
 	::glCullFace(mode);
-	NanReturnUndefined();
 }
 
 //void glDeleteBuffers(GLsizei n, const GLuint* buffers);
-MODULE_EXPORT_IMPLEMENT(glDeleteBuffers)
+NANX_EXPORT(glDeleteBuffers)
 {
-	NanScope();
-	GLsizei n = ARG_UINT32(0);
-	GLuint* buffers = (GLuint*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(1), n);
+	GLsizei n = NANX_GLsizei(info[0]);
+	GLuint* buffers = (GLuint*) GetUint32ArrayData(info[1], n);
 	::glDeleteBuffers(n, buffers);
-	NanReturnUndefined();
 }
 
 //void glDeleteFramebuffers(GLsizei n, const GLuint* framebuffers);
-MODULE_EXPORT_IMPLEMENT(glDeleteFramebuffers)
+NANX_EXPORT(glDeleteFramebuffers)
 {
-	NanScope();
-	GLsizei n = ARG_UINT32(0);
-	GLuint* framebuffers = (GLuint*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(1), n);
+	GLsizei n = NANX_GLsizei(info[0]);
+	GLuint* framebuffers = (GLuint*) GetUint32ArrayData(info[1], n);
 	::glDeleteFramebuffers(n, framebuffers);
-	NanReturnUndefined();
 }
 
 //void glDeleteProgram(GLuint program);
-MODULE_EXPORT_IMPLEMENT(glDeleteProgram)
+NANX_EXPORT(glDeleteProgram)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
+	GLuint program = NANX_GLuint(info[0]);
 	::glDeleteProgram(program);
-	NanReturnUndefined();
 }
 
 //void glDeleteRenderbuffers(GLsizei n, const GLuint* renderbuffers);
-MODULE_EXPORT_IMPLEMENT(glDeleteRenderbuffers)
+NANX_EXPORT(glDeleteRenderbuffers)
 {
-	NanScope();
-	GLsizei n = ARG_UINT32(0);
-	GLuint* renderbuffers = (GLuint*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(1), n);
+	GLsizei n = NANX_GLsizei(info[0]);
+	GLuint* renderbuffers = (GLuint*) GetUint32ArrayData(info[1], n);
 	::glDeleteRenderbuffers(n, renderbuffers);
-	NanReturnUndefined();
 }
 
 //void glDeleteShader(GLuint shader);
-MODULE_EXPORT_IMPLEMENT(glDeleteShader)
+NANX_EXPORT(glDeleteShader)
 {
-	NanScope();
-	GLuint shader = ARG_UINT32(0);
+	GLuint shader = NANX_GLuint(info[0]);
 	::glDeleteShader(shader);
-	NanReturnUndefined();
 }
 
 //void glDeleteTextures(GLsizei n, const GLuint* textures);
-MODULE_EXPORT_IMPLEMENT(glDeleteTextures)
+NANX_EXPORT(glDeleteTextures)
 {
-	NanScope();
-	GLsizei n = ARG_UINT32(0);
-	GLuint* textures = (GLuint*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(1), n);
+	GLsizei n = NANX_GLsizei(info[0]);
+	GLuint* textures = (GLuint*) GetUint32ArrayData(info[1], n);
 	::glDeleteTextures(n, textures);
-	NanReturnUndefined();
 }
 
 //void glDepthFunc(GLenum func);
-MODULE_EXPORT_IMPLEMENT(glDepthFunc)
+NANX_EXPORT(glDepthFunc)
 {
-	NanScope();
-	GLenum func = ARG_UINT32(0);
+	GLenum func = NANX_GLenum(info[0]);
 	::glDepthFunc(func);
-	NanReturnUndefined();
 }
 
 //void glDepthMask(GLboolean flag);
-MODULE_EXPORT_IMPLEMENT(glDepthMask)
+NANX_EXPORT(glDepthMask)
 {
-	NanScope();
-	GLboolean flag = ARG_BOOLEAN(0);
+	GLboolean flag = NANX_GLboolean(info[0]);
 	::glDepthMask(flag);
-	NanReturnUndefined();
 }
 
 //void glDepthRangef(GLclampf zNear, GLclampf zFar);
-MODULE_EXPORT_IMPLEMENT(glDepthRangef)
+NANX_EXPORT(glDepthRangef)
 {
-	NanScope();
-	GLclampf zNear = (GLclampf) ARG_NUMBER(0);
-	GLclampf zFar = (GLclampf) ARG_NUMBER(1);
+	GLclampf zNear = NANX_GLclampf(info[0]);
+	GLclampf zFar = NANX_GLclampf(info[1]);
 	::glDepthRangef(zNear, zFar);
-	NanReturnUndefined();
 }
 
 //void glDetachShader(GLuint program, GLuint shader);
-MODULE_EXPORT_IMPLEMENT(glDetachShader)
+NANX_EXPORT(glDetachShader)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
-	GLuint shader = ARG_UINT32(1);
+	GLuint program = NANX_GLuint(info[0]);
+	GLuint shader = NANX_GLuint(info[1]);
 	::glDetachShader(program, shader);
-	NanReturnUndefined();
 }
 
 //void glDisable(GLenum cap);
-MODULE_EXPORT_IMPLEMENT(glDisable)
+NANX_EXPORT(glDisable)
 {
-	NanScope();
-	GLenum cap = ARG_UINT32(0);
+	GLenum cap = NANX_GLenum(info[0]);
 	::glDisable(cap);
-	NanReturnUndefined();
 }
 
 //void glDisableVertexAttribArray(GLuint index);
-MODULE_EXPORT_IMPLEMENT(glDisableVertexAttribArray)
+NANX_EXPORT(glDisableVertexAttribArray)
 {
-	NanScope();
-	GLuint index = ARG_UINT32(0);
+	GLuint index = NANX_GLuint(info[0]);
 	::glDisableVertexAttribArray(index);
-	NanReturnUndefined();
 }
 
 //void glDrawArrays(GLenum mode, GLint first, GLsizei count);
-MODULE_EXPORT_IMPLEMENT(glDrawArrays)
+NANX_EXPORT(glDrawArrays)
 {
-	NanScope();
-	GLenum mode = ARG_UINT32(0);
-	GLint first = ARG_INT32(1);
-	GLsizei count = ARG_UINT32(2);
+	GLenum mode = NANX_GLenum(info[0]);
+	GLint first = NANX_GLint(info[1]);
+	GLsizei count = NANX_GLsizei(info[2]);
 	::glDrawArrays(mode, first, count);
-	NanReturnUndefined();
 }
 
 //void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices);
-MODULE_EXPORT_IMPLEMENT(glDrawElements)
+NANX_EXPORT(glDrawElements)
 {
-	NanScope();
-	GLenum mode = ARG_UINT32(0);
-	GLsizei count = ARG_UINT32(1);
-	GLenum type = ARG_UINT32(2);
-	const GLvoid* indices = (const GLvoid*) args[3]->IntegerValue(); // TODO
+	GLenum mode = NANX_GLenum(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	GLenum type = NANX_GLenum(info[2]);
+	const GLvoid* indices = (const GLvoid*) info[3]->IntegerValue(); // TODO
 	::glDrawElements(mode, count, type, indices);
-	NanReturnUndefined();
 }
 
 //void glEnable(GLenum cap);
-MODULE_EXPORT_IMPLEMENT(glEnable)
+NANX_EXPORT(glEnable)
 {
-	NanScope();
-	GLenum cap = ARG_UINT32(0);
+	GLenum cap = NANX_GLenum(info[0]);
 	::glEnable(cap);
-	NanReturnUndefined();
 }
 
 //void glEnableVertexAttribArray(GLuint index);
-MODULE_EXPORT_IMPLEMENT(glEnableVertexAttribArray)
+NANX_EXPORT(glEnableVertexAttribArray)
 {
-	NanScope();
-	GLuint index = ARG_UINT32(0);
+	GLuint index = NANX_GLuint(info[0]);
 	::glEnableVertexAttribArray(index);
-	NanReturnUndefined();
 }
 
 //void glFinish(void);
-MODULE_EXPORT_IMPLEMENT(glFinish)
+NANX_EXPORT(glFinish)
 {
-	NanScope();
 	::glFinish();
-	NanReturnUndefined();
 }
 
 //void glFlush(void);
-MODULE_EXPORT_IMPLEMENT(glFlush)
+NANX_EXPORT(glFlush)
 {
-	NanScope();
 	::glFlush();
-	NanReturnUndefined();
 }
 
 //void glFramebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer);
-MODULE_EXPORT_IMPLEMENT(glFramebufferRenderbuffer)
+NANX_EXPORT(glFramebufferRenderbuffer)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum attachment = ARG_UINT32(1);
-	GLenum renderbuffertarget = ARG_UINT32(2);
-	GLuint renderbuffer = ARG_UINT32(3);
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum attachment = NANX_GLenum(info[1]);
+	GLenum renderbuffertarget = NANX_GLenum(info[2]);
+	GLuint renderbuffer = NANX_GLuint(info[3]);
 	::glFramebufferRenderbuffer(target, attachment, renderbuffertarget, renderbuffer);
-	NanReturnUndefined();
 }
 
 //void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
-MODULE_EXPORT_IMPLEMENT(glFramebufferTexture2D)
+NANX_EXPORT(glFramebufferTexture2D)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum attachment = ARG_UINT32(1);
-	GLenum textarget = ARG_UINT32(2);
-	GLuint texture = ARG_UINT32(3);
-	GLint level = ARG_INT32(4);
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum attachment = NANX_GLenum(info[1]);
+	GLenum textarget = NANX_GLenum(info[2]);
+	GLuint texture = NANX_GLuint(info[3]);
+	GLint level = NANX_GLint(info[4]);
 	::glFramebufferTexture2D(target, attachment, textarget, texture, level);
-	NanReturnUndefined();
 }
 
 //void glFrontFace(GLenum mode);
-MODULE_EXPORT_IMPLEMENT(glFrontFace)
+NANX_EXPORT(glFrontFace)
 {
-	NanScope();
-	GLenum mode = ARG_UINT32(0);
+	GLenum mode = NANX_GLenum(info[0]);
 	::glFrontFace(mode);
-	NanReturnUndefined();
 }
 
 //void glGenBuffers(GLsizei n, GLuint* buffers);
-MODULE_EXPORT_IMPLEMENT(glGenBuffers)
+NANX_EXPORT(glGenBuffers)
 {
-	NanScope();
-	GLsizei n = ARG_UINT32(0);
-	GLuint* buffers = (GLuint*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(1), n);
+	GLsizei n = NANX_GLsizei(info[0]);
+	GLuint* buffers = (GLuint*) GetUint32ArrayData(info[1], n);
 	::glGenBuffers(n, buffers);
-	NanReturnUndefined();
 }
 
 //void glGenerateMipmap(GLenum target);
-MODULE_EXPORT_IMPLEMENT(glGenerateMipmap)
+NANX_EXPORT(glGenerateMipmap)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
+	GLenum target = NANX_GLenum(info[0]);
 	::glGenerateMipmap(target);
-	NanReturnUndefined();
 }
 
 //void glGenFramebuffers(GLsizei n, GLuint* framebuffers);
-MODULE_EXPORT_IMPLEMENT(glGenFramebuffers)
+NANX_EXPORT(glGenFramebuffers)
 {
-	NanScope();
-	GLsizei n = ARG_UINT32(0);
-	GLuint* framebuffers = (GLuint*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(1), n);
+	GLsizei n = NANX_GLsizei(info[0]);
+	GLuint* framebuffers = (GLuint*) GetUint32ArrayData(info[1], n);
 	::glGenFramebuffers(n, framebuffers);
-	NanReturnUndefined();
 }
 
 //void glGenRenderbuffers(GLsizei n, GLuint* renderbuffers);
-MODULE_EXPORT_IMPLEMENT(glGenRenderbuffers)
+NANX_EXPORT(glGenRenderbuffers)
 {
-	NanScope();
-	GLsizei n = ARG_UINT32(0);
-	GLuint* renderbuffers = (GLuint*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(1), n);
+	GLsizei n = NANX_GLsizei(info[0]);
+	GLuint* renderbuffers = (GLuint*) GetUint32ArrayData(info[1], n);
 	::glGenRenderbuffers(n, renderbuffers);
-	NanReturnUndefined();
 }
 
 //void glGenTextures(GLsizei n, GLuint* textures);
-MODULE_EXPORT_IMPLEMENT(glGenTextures)
+NANX_EXPORT(glGenTextures)
 {
-	NanScope();
-	GLsizei n = ARG_UINT32(0);
-	GLuint* textures = (GLuint*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(1), n);
+	GLsizei n = NANX_GLsizei(info[0]);
+	GLuint* textures = (GLuint*) GetUint32ArrayData(info[1], n);
 	::glGenTextures(n, textures);
-	NanReturnUndefined();
 }
 
 //void glGetActiveAttrib(GLuint program, GLuint index, GLsizei bufsize, GLsizei* length, GLint* size, GLenum* type, GLchar* name);
-MODULE_EXPORT_IMPLEMENT(glGetActiveAttrib)
+NANX_EXPORT(glGetActiveAttrib)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
-	GLuint index = ARG_UINT32(1);
-	GLsizei bufsize = ARG_UINT32(2);
-	GLint* length = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(3), 1);
-	GLint* size = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(4), 1);
-	GLenum* type = (GLenum*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(5), 1);
-	Handle<Array> _name = ARG_ARRAY(6);
+	GLuint program = NANX_GLuint(info[0]);
+	GLuint index = NANX_GLuint(info[1]);
+	GLsizei bufsize = NANX_GLsizei(info[2]);
+	GLint* length = (GLint*) GetInt32ArrayData(info[3], 1);
+	GLint* size = (GLint*) GetInt32ArrayData(info[4], 1);
+	GLenum* type = (GLenum*) GetUint32ArrayData(info[5], 1);
+	v8::Local<v8::Array> _name = v8::Local<v8::Array>::Cast(info[6]);
 	const size_t s_name_count = 64;
 	static GLchar s_name[s_name_count];
 	GLchar* name = ((size_t) bufsize <= s_name_count)?(s_name):((GLchar*) malloc(bufsize * sizeof(GLchar)));
 	::glGetActiveAttrib(program, index, bufsize, length, size, type, name);
-	_name->Set(0, NanNew<String>(name));
+	_name->Set(0, NANX_STRING(name));
 	if (name != s_name) { free(name); }
-	NanReturnUndefined();
 }
 
 //void glGetActiveUniform(GLuint program, GLuint index, GLsizei bufsize, GLsizei* length, GLint* size, GLenum* type, GLchar* name);
-MODULE_EXPORT_IMPLEMENT(glGetActiveUniform)
+NANX_EXPORT(glGetActiveUniform)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
-	GLuint index = ARG_UINT32(1);
-	GLsizei bufsize = ARG_UINT32(2);
-	GLint* length = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(3), 1);
-	GLint* size = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(4), 1);
-	GLenum* type = (GLenum*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(5), 1);
-	Handle<Array> _name = ARG_ARRAY(6);
+	GLuint program = NANX_GLuint(info[0]);
+	GLuint index = NANX_GLuint(info[1]);
+	GLsizei bufsize = NANX_GLsizei(info[2]);
+	GLint* length = (GLint*) GetInt32ArrayData(info[3], 1);
+	GLint* size = (GLint*) GetInt32ArrayData(info[4], 1);
+	GLenum* type = (GLenum*) GetUint32ArrayData(info[5], 1);
+	v8::Local<v8::Array> _name = v8::Local<v8::Array>::Cast(info[6]);
 	const size_t s_name_count = 64;
 	static GLchar s_name[s_name_count];
 	GLchar* name = ((size_t) bufsize <= s_name_count)?(s_name):((GLchar*) malloc(bufsize * sizeof(GLchar)));
 	::glGetActiveUniform(program, index, bufsize, length, size, type, name);
-	_name->Set(0, NanNew<String>(name));
+	_name->Set(0, NANX_STRING(name));
 	if (name != s_name) { free(name); }
-	NanReturnUndefined();
 }
 
 //void glGetAttachedShaders(GLuint program, GLsizei maxcount, GLsizei* count, GLuint* shaders);
-MODULE_EXPORT_IMPLEMENT(glGetAttachedShaders)
+NANX_EXPORT(glGetAttachedShaders)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
-	GLsizei maxcount = ARG_UINT32(1);
-	GLsizei* count = (GLsizei*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(2), 1);
-	GLuint* shaders = (GLuint*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(3), maxcount);
+	GLuint program = NANX_GLuint(info[0]);
+	GLsizei maxcount = NANX_GLsizei(info[1]);
+	GLsizei* count = (GLsizei*) GetUint32ArrayData(info[2], 1);
+	GLuint* shaders = (GLuint*) GetUint32ArrayData(info[3], maxcount);
 	::glGetAttachedShaders(program, maxcount, count, shaders);
-	NanReturnUndefined();
 }
 
 //GLint glGetAttribLocation(GLuint program, const GLchar* name);
-MODULE_EXPORT_IMPLEMENT(glGetAttribLocation)
+NANX_EXPORT(glGetAttribLocation)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
-	Handle<String> name = ARG_STRING(1);
-	GLint location = ::glGetAttribLocation(program, *String::Utf8Value(name));
-	NanReturnValue(NanNew<Integer>(location));
+	GLuint program = NANX_GLuint(info[0]);
+	v8::Local<v8::String> name = v8::Local<v8::String>::Cast(info[1]);
+	GLint location = ::glGetAttribLocation(program, *v8::String::Utf8Value(name));
+	info.GetReturnValue().Set(Nan::New(location));
 }
 
 //void glGetBooleanv(GLenum pname, GLboolean* params);
-MODULE_EXPORT_IMPLEMENT(glGetBooleanv)
+NANX_EXPORT(glGetBooleanv)
 {
-	NanScope();
-	GLenum pname = ARG_UINT32(0);
-	GLboolean* params = (GLboolean*) GetTypedArray<kExternalUnsignedByteArray>(ARG_OBJECT(1)); // TODO: length
+	GLenum pname = NANX_GLenum(info[0]);
+	GLboolean* params = static_cast<GLboolean*>(GetUint8ArrayData(info[1])); // TODO: length
 	::glGetBooleanv(pname, params);
-	NanReturnUndefined();
 }
 
 //void glGetBufferParameteriv(GLenum target, GLenum pname, GLint* params);
-MODULE_EXPORT_IMPLEMENT(glGetBufferParameteriv)
+NANX_EXPORT(glGetBufferParameteriv)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	GLint* params = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(2)); // TODO: length
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	GLint* params = static_cast<GLint*>(GetInt32ArrayData(info[2])); // TODO: length
 	::glGetBufferParameteriv(target, pname, params);
-	NanReturnUndefined();
 }
 
 //GLenum glGetError(void);
-MODULE_EXPORT_IMPLEMENT(glGetError)
+NANX_EXPORT(glGetError)
 {
-	NanScope();
 	GLenum gl_error = ::glGetError();
-	NanReturnValue(NanNew(gl_error));
+	info.GetReturnValue().Set(Nan::New(gl_error));
 }
 
 //void glGetFloatv(GLenum pname, GLfloat* params);
-MODULE_EXPORT_IMPLEMENT(glGetFloatv)
+NANX_EXPORT(glGetFloatv)
 {
-	NanScope();
-	GLenum pname = ARG_UINT32(0);
-	GLfloat* params = (GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(1)); // TODO: length
+	GLenum pname = NANX_GLenum(info[0]);
+	GLfloat* params = static_cast<GLfloat*>(GetFloat32ArrayData(info[1])); // TODO: length
 	::glGetFloatv(pname, params);
-	NanReturnUndefined();
 }
 
 //void glGetFramebufferAttachmentParameteriv(GLenum target, GLenum attachment, GLenum pname, GLint* params);
-MODULE_EXPORT_IMPLEMENT(glGetFramebufferAttachmentParameteriv)
+NANX_EXPORT(glGetFramebufferAttachmentParameteriv)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum attachment = ARG_UINT32(1);
-	GLenum pname = ARG_UINT32(2);
-	GLint* params = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(3)); // TODO: length
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum attachment = NANX_GLenum(info[1]);
+	GLenum pname = NANX_GLenum(info[2]);
+	GLint* params = static_cast<GLint*>(GetInt32ArrayData(info[3])); // TODO: length
 	::glGetFramebufferAttachmentParameteriv(target, attachment, pname, params);
-	NanReturnUndefined();
 }
 
 //void glGetIntegerv(GLenum pname, GLint* params);
-MODULE_EXPORT_IMPLEMENT(glGetIntegerv)
+NANX_EXPORT(glGetIntegerv)
 {
-	NanScope();
-	GLenum pname = ARG_UINT32(0);
-	GLint* params = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(1)); // TODO: length
+	GLenum pname = NANX_GLenum(info[0]);
+	GLint* params = static_cast<GLint*>(GetInt32ArrayData(info[1])); // TODO: length
 	::glGetIntegerv(pname, params);
 
 	#if defined(GL_MAX_VARYING_COMPONENTS)
@@ -845,409 +829,366 @@ MODULE_EXPORT_IMPLEMENT(glGetIntegerv)
 	}
 	#endif
 
-	NanReturnUndefined();
 }
 
 //void glGetProgramiv(GLuint program, GLenum pname, GLint* params);
-MODULE_EXPORT_IMPLEMENT(glGetProgramiv)
+NANX_EXPORT(glGetProgramiv)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	GLint* params = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(2)); // TODO: length
+	GLuint program = NANX_GLuint(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	GLint* params = static_cast<GLint*>(GetInt32ArrayData(info[2])); // TODO: length
 	::glGetProgramiv(program, pname, params);
-	NanReturnUndefined();
 }
 
 //void glGetProgramInfoLog(GLuint program, GLsizei bufsize, GLsizei* length, GLchar* infolog);
-MODULE_EXPORT_IMPLEMENT(glGetProgramInfoLog)
+NANX_EXPORT(glGetProgramInfoLog)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
-	GLsizei bufsize = ARG_UINT32(1);
-	GLsizei* length = (GLsizei*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(2), 1);
-	Handle<Array> _infolog = ARG_ARRAY(3);
+	GLuint program = NANX_GLuint(info[0]);
+	GLsizei bufsize = NANX_GLsizei(info[1]);
+	GLsizei* length = static_cast<GLsizei*>(GetInt32ArrayData(info[2], 1));
+	v8::Local<v8::Array> _infolog = v8::Local<v8::Array>::Cast(info[3]);
 	const size_t s_infolog_count = 64;
 	static GLchar s_infolog[s_infolog_count];
-	GLchar* infolog = ((size_t) bufsize <= s_infolog_count)?(s_infolog):((GLchar*) malloc(bufsize * sizeof(GLchar)));
+	GLchar* infolog = ((size_t) bufsize <= s_infolog_count)?(s_infolog):(static_cast<GLchar*>(malloc(bufsize * sizeof(GLchar))));
 	::glGetProgramInfoLog(program, bufsize, length, infolog);
-	_infolog->Set(0, NanNew<String>(infolog));
+	_infolog->Set(0, NANX_STRING(infolog));
 	if (infolog != s_infolog) { free(infolog); }
-	NanReturnUndefined();
 }
 
 //void glGetRenderbufferParameteriv(GLenum target, GLenum pname, GLint* params);
-MODULE_EXPORT_IMPLEMENT(glGetRenderbufferParameteriv)
+NANX_EXPORT(glGetRenderbufferParameteriv)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	GLint* params = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(2)); // TODO: length
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	GLint* params = static_cast<GLint*>(GetInt32ArrayData(info[2])); // TODO: length
 	::glGetRenderbufferParameteriv(target, pname, params);
-	NanReturnUndefined();
 }
 
 //void glGetShaderiv(GLuint shader, GLenum pname, GLint* params);
-MODULE_EXPORT_IMPLEMENT(glGetShaderiv)
+NANX_EXPORT(glGetShaderiv)
 {
-	NanScope();
-	GLuint shader = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	GLint* params = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(2)); // TODO: length
+	GLuint shader = NANX_GLuint(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	GLint* params = static_cast<GLint*>(GetInt32ArrayData(info[2])); // TODO: length
 	::glGetShaderiv(shader, pname, params);
-	NanReturnUndefined();
 }
 
 //void glGetShaderInfoLog(GLuint shader, GLsizei bufsize, GLsizei* length, GLchar* infolog);
-MODULE_EXPORT_IMPLEMENT(glGetShaderInfoLog)
+NANX_EXPORT(glGetShaderInfoLog)
 {
-	NanScope();
-	GLuint shader = ARG_UINT32(0);
-	GLsizei bufsize = ARG_UINT32(1);
-	GLsizei* length = (GLsizei*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(2), 1);
-	Handle<Array> _infolog = ARG_ARRAY(3);
+	GLuint shader = NANX_GLuint(info[0]);
+	GLsizei bufsize = NANX_GLsizei(info[1]);
+	GLsizei* length = static_cast<GLsizei*>(GetInt32ArrayData(info[2], 1));
+	v8::Local<v8::Array> _infolog = v8::Local<v8::Array>::Cast(info[3]);
 	const size_t s_infolog_count = 64;
 	static GLchar s_infolog[s_infolog_count];
-	GLchar* infolog = ((size_t) bufsize <= s_infolog_count)?(s_infolog):((GLchar*) malloc(bufsize * sizeof(GLchar)));
+	GLchar* infolog = ((size_t) bufsize <= s_infolog_count)?(s_infolog):(static_cast<GLchar*>(malloc(bufsize * sizeof(GLchar))));
 	::glGetShaderInfoLog(shader, bufsize, length, infolog);
-	_infolog->Set(0, NanNew<String>(infolog));
+	_infolog->Set(0, NANX_STRING(infolog));
 	if (infolog != s_infolog) { free(infolog); }
-	NanReturnUndefined();
 }
 
 //void glGetShaderPrecisionFormat(GLenum shadertype, GLenum precisiontype, GLint* range, GLint* precision);
-MODULE_EXPORT_IMPLEMENT(glGetShaderPrecisionFormat)
+NANX_EXPORT(glGetShaderPrecisionFormat)
 {
-	NanScope();
-	GLenum shadertype = ARG_UINT32(0);
-	GLenum precisiontype = ARG_UINT32(1);
-	Handle<Array> _range = ARG_ARRAY(2);
-	Handle<Array> _precision = ARG_ARRAY(3);
+	GLenum shadertype = NANX_GLenum(info[0]);
+	GLenum precisiontype = NANX_GLenum(info[1]);
+	v8::Local<v8::Array> _range = v8::Local<v8::Array>::Cast(info[2]);
+	v8::Local<v8::Array> _precision = v8::Local<v8::Array>::Cast(info[3]);
 	GLsizei range[2] = { static_cast<GLsizei>(_range->Get(0)->Uint32Value()), static_cast<GLsizei>(_range->Get(1)->Uint32Value()) };
 	GLint precision = _precision->Get(0)->Int32Value();
 	::glGetShaderPrecisionFormat(shadertype, precisiontype, range, &precision);
-	_range->Set(0, NanNew(range[0]));
-	_range->Set(1, NanNew(range[1]));
-	_precision->Set(0, NanNew<Integer>(precision));
-	NanReturnUndefined();
+	_range->Set(0, Nan::New(range[0]));
+	_range->Set(1, Nan::New(range[1]));
+	_precision->Set(0, Nan::New(precision));
 }
 
 //void glGetShaderSource(GLuint shader, GLsizei bufsize, GLsizei* length, GLchar* source);
-MODULE_EXPORT_IMPLEMENT(glGetShaderSource)
+NANX_EXPORT(glGetShaderSource)
 {
-	NanScope();
-	GLuint shader = ARG_UINT32(0);
-	GLsizei bufsize = ARG_UINT32(1);
-	GLsizei* length = (GLsizei*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(2), 1);
-	Handle<Array> _source = ARG_ARRAY(3);
+	GLuint shader = NANX_GLuint(info[0]);
+	GLsizei bufsize = NANX_GLsizei(info[1]);
+	GLsizei* length = static_cast<GLsizei*>(GetInt32ArrayData(info[2], 1));
+	v8::Local<v8::Array> _source = v8::Local<v8::Array>::Cast(info[3]);
 	const size_t s_source_count = 256;
 	static GLchar s_source[s_source_count];
-	GLchar* source = ((size_t) bufsize <= s_source_count)?(s_source):((GLchar*) malloc(bufsize * sizeof(GLchar)));
+	GLchar* source = ((size_t) bufsize <= s_source_count)?(s_source):(static_cast<GLchar*>(malloc(bufsize * sizeof(GLchar))));
 	::glGetShaderSource(shader, bufsize, length, source);
-	_source->Set(0, NanNew<String>(source));
+	_source->Set(0, NANX_STRING(source));
 	if (source != s_source) { free(source); }
-	NanReturnUndefined();
 }
 
 //const GLubyte* glGetString(GLenum name);
-MODULE_EXPORT_IMPLEMENT(glGetString)
+NANX_EXPORT(glGetString)
 {
-	NanScope();
-	GLenum name = ARG_UINT32(0);
+	GLenum name = NANX_GLenum(info[0]);
 	const GLubyte* gl_string = ::glGetString(name);
 	if (gl_string != 0)
 	{
-		NanReturnValue(NanNew<String>((const char *) gl_string));
+		info.GetReturnValue().Set(NANX_STRING(reinterpret_cast<const char*>(gl_string)));
+		return;
 	}
-	NanReturnUndefined();
 }
 
 //void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat* params);
-MODULE_EXPORT_IMPLEMENT(glGetTexParameterfv)
+NANX_EXPORT(glGetTexParameterfv)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	GLfloat* params = (GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(2)); // TODO: length
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	GLfloat* params = static_cast<GLfloat*>(GetFloat32ArrayData(info[2])); // TODO: length
 	::glGetTexParameterfv(target, pname, params);
-	NanReturnUndefined();
 }
 
 //void glGetTexParameteriv(GLenum target, GLenum pname, GLint* params);
-MODULE_EXPORT_IMPLEMENT(glGetTexParameteriv)
+NANX_EXPORT(glGetTexParameteriv)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	GLint* params = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(2)); // TODO: length
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	GLint* params = static_cast<GLint*>(GetInt32ArrayData(info[2])); // TODO: length
 	::glGetTexParameteriv(target, pname, params);
-	NanReturnUndefined();
 }
 
 //void glGetUniformfv(GLuint program, GLint location, GLfloat* params);
-MODULE_EXPORT_IMPLEMENT(glGetUniformfv)
+NANX_EXPORT(glGetUniformfv)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
-	GLint location = ARG_INT32(1);
-	GLfloat* params = (GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(2)); // TODO: length
+	GLuint program = NANX_GLuint(info[0]);
+	GLint location = NANX_GLint(info[1]);
+	GLfloat* params = static_cast<GLfloat*>(GetFloat32ArrayData(info[2])); // TODO: length
 	::glGetUniformfv(program, location, params);
-	NanReturnUndefined();
 }
 
 //void glGetUniformiv(GLuint program, GLint location, GLint* params);
-MODULE_EXPORT_IMPLEMENT(glGetUniformiv)
+NANX_EXPORT(glGetUniformiv)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
-	GLint location = ARG_INT32(1);
-	GLint* params = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(2)); // TODO: length
+	GLuint program = NANX_GLuint(info[0]);
+	GLint location = NANX_GLint(info[1]);
+	GLint* params = static_cast<GLint*>(GetInt32ArrayData(info[2])); // TODO: length
 	::glGetUniformiv(program, location, params);
-	NanReturnUndefined();
 }
 
 //GLint glGetUniformLocation(GLuint program, const GLchar* name);
-MODULE_EXPORT_IMPLEMENT(glGetUniformLocation)
+NANX_EXPORT(glGetUniformLocation)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
-	Handle<String> name = ARG_STRING(1);
-	GLint location = ::glGetUniformLocation(program, *String::Utf8Value(name));
-	NanReturnValue(NanNew<Integer>(location));
+	GLuint program = NANX_GLuint(info[0]);
+	v8::Local<v8::String> name = v8::Local<v8::String>::Cast(info[1]);
+	GLint location = ::glGetUniformLocation(program, *v8::String::Utf8Value(name));
+	info.GetReturnValue().Set(Nan::New(location));
 }
 
 //void glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat* params);
-MODULE_EXPORT_IMPLEMENT(glGetVertexAttribfv)
+NANX_EXPORT(glGetVertexAttribfv)
 {
-	NanScope();
-	GLuint index = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	GLfloat* params = (GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(2)); // TODO: length
+	GLuint index = NANX_GLuint(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	GLfloat* params = static_cast<GLfloat*>(GetFloat32ArrayData(info[2])); // TODO: length
 	::glGetVertexAttribfv(index, pname, params);
-	NanReturnUndefined();
 }
 
 //void glGetVertexAttribiv(GLuint index, GLenum pname, GLint* params);
-MODULE_EXPORT_IMPLEMENT(glGetVertexAttribiv)
+NANX_EXPORT(glGetVertexAttribiv)
 {
-	NanScope();
-	GLuint index = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	GLint* params = (GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(2)); // TODO: length
+	GLuint index = NANX_GLuint(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	GLint* params = static_cast<GLint*>(GetInt32ArrayData(info[2])); // TODO: length
 	::glGetVertexAttribiv(index, pname, params);
-	NanReturnUndefined();
 }
 
 //void glGetVertexAttribPointerv(GLuint index, GLenum pname, GLvoid** pointer);
-MODULE_EXPORT_IMPLEMENT(glGetVertexAttribPointerv)
+NANX_EXPORT(glGetVertexAttribPointerv)
 {
-	NanScope();
-	GLuint index = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	Handle<Array> _pointer = ARG_ARRAY(2);
+	GLuint index = NANX_GLuint(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	v8::Local<v8::Array> _pointer = v8::Local<v8::Array>::Cast(info[2]);
 	GLuint offset = 0;
-	GLvoid* pointer = (GLvoid*) &offset;
+	GLvoid* pointer = static_cast<GLvoid*>(&offset);
 	::glGetVertexAttribPointerv(index, pname, &pointer);
-	_pointer->Set(0, NanNew(offset));
-	NanReturnUndefined();
+	_pointer->Set(0, Nan::New(offset));
 }
 
 //void glHint(GLenum target, GLenum mode);
-MODULE_EXPORT_IMPLEMENT(glHint)
+NANX_EXPORT(glHint)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum mode = ARG_UINT32(1);
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum mode = NANX_GLenum(info[1]);
 	::glHint(target, mode);
-	NanReturnUndefined();
 }
 
 //GLboolean glIsBuffer(GLuint buffer);
-MODULE_EXPORT_IMPLEMENT(glIsBuffer)
+NANX_EXPORT(glIsBuffer)
 {
-	NanScope();
-	GLuint buffer = ARG_UINT32(0);
+	GLuint buffer = NANX_GLuint(info[0]);
 	GLboolean b = ::glIsBuffer(buffer);
-	NanReturnValue(NanNew<Boolean>(b != GL_FALSE));
+	info.GetReturnValue().Set(Nan::New(b != GL_FALSE));
 }
 
 //GLboolean glIsEnabled(GLenum cap);
-MODULE_EXPORT_IMPLEMENT(glIsEnabled)
+NANX_EXPORT(glIsEnabled)
 {
-	NanScope();
-	GLenum cap = ARG_UINT32(0);
+	GLenum cap = NANX_GLenum(info[0]);
 	GLboolean b = ::glIsEnabled(cap);
-	NanReturnValue(NanNew<Boolean>(b != GL_FALSE));
+	info.GetReturnValue().Set(Nan::New(b != GL_FALSE));
 }
 
 //GLboolean glIsFramebuffer(GLuint framebuffer);
-MODULE_EXPORT_IMPLEMENT(glIsFramebuffer)
+NANX_EXPORT(glIsFramebuffer)
 {
-	NanScope();
-	GLuint framebuffer = ARG_UINT32(0);
+	GLuint framebuffer = NANX_GLuint(info[0]);
 	GLboolean b = ::glIsFramebuffer(framebuffer);
-	NanReturnValue(NanNew<Boolean>(b != GL_FALSE));
+	info.GetReturnValue().Set(Nan::New(b != GL_FALSE));
 }
 
 //GLboolean glIsProgram(GLuint program);
-MODULE_EXPORT_IMPLEMENT(glIsProgram)
+NANX_EXPORT(glIsProgram)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
+	GLuint program = NANX_GLuint(info[0]);
 	GLboolean b = ::glIsProgram(program);
-	NanReturnValue(NanNew<Boolean>(b != GL_FALSE));
+	info.GetReturnValue().Set(Nan::New(b != GL_FALSE));
 }
 
 //GLboolean glIsRenderbuffer(GLuint renderbuffer);
-MODULE_EXPORT_IMPLEMENT(glIsRenderbuffer)
+NANX_EXPORT(glIsRenderbuffer)
 {
-	NanScope();
-	GLuint renderbuffer = ARG_UINT32(0);
+	GLuint renderbuffer = NANX_GLuint(info[0]);
 	GLboolean b = ::glIsRenderbuffer(renderbuffer);
-	NanReturnValue(NanNew<Boolean>(b != GL_FALSE));
+	info.GetReturnValue().Set(Nan::New(b != GL_FALSE));
 }
 
 //GLboolean glIsShader(GLuint shader);
-MODULE_EXPORT_IMPLEMENT(glIsShader)
+NANX_EXPORT(glIsShader)
 {
-	NanScope();
-	GLuint shader = ARG_UINT32(0);
+	GLuint shader = NANX_GLuint(info[0]);
 	GLboolean b = ::glIsShader(shader);
-	NanReturnValue(NanNew<Boolean>(b != GL_FALSE));
+	info.GetReturnValue().Set(Nan::New(b != GL_FALSE));
 }
 
 //GLboolean glIsTexture(GLuint texture);
-MODULE_EXPORT_IMPLEMENT(glIsTexture)
+NANX_EXPORT(glIsTexture)
 {
-	NanScope();
-	GLuint texture = ARG_UINT32(0);
+	GLuint texture = NANX_GLuint(info[0]);
 	GLboolean b = ::glIsTexture(texture);
-	NanReturnValue(NanNew<Boolean>(b != GL_FALSE));
+	info.GetReturnValue().Set(Nan::New(b != GL_FALSE));
 }
 
 //void glLineWidth(GLfloat width);
-MODULE_EXPORT_IMPLEMENT(glLineWidth)
+NANX_EXPORT(glLineWidth)
 {
-	NanScope();
-	GLfloat width = (GLfloat) ARG_NUMBER(0);
+	GLfloat width = NANX_GLfloat(info[0]);
 	::glLineWidth(width);
-	NanReturnUndefined();
 }
 
 //void glLinkProgram(GLuint program);
-MODULE_EXPORT_IMPLEMENT(glLinkProgram)
+NANX_EXPORT(glLinkProgram)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
+	GLuint program = NANX_GLuint(info[0]);
 	::glLinkProgram(program);
-	NanReturnUndefined();
 }
 
 //void glPixelStorei(GLenum pname, GLint param);
-MODULE_EXPORT_IMPLEMENT(glPixelStorei)
+NANX_EXPORT(glPixelStorei)
 {
-	NanScope();
-	GLenum pname = ARG_UINT32(0);
-	GLint param = ARG_INT32(1);
+	GLenum pname = NANX_GLenum(info[0]);
+	GLint param = NANX_GLint(info[1]);
 	::glPixelStorei(pname, param);
-	NanReturnUndefined();
 }
 
 //void glPolygonOffset(GLfloat factor, GLfloat units);
-MODULE_EXPORT_IMPLEMENT(glPolygonOffset)
+NANX_EXPORT(glPolygonOffset)
 {
-	NanScope();
-	GLfloat factor = (GLfloat) ARG_NUMBER(0);
-	GLfloat units = (GLfloat) ARG_NUMBER(1);
+	GLfloat factor = NANX_GLfloat(info[0]);
+	GLfloat units = NANX_GLfloat(info[1]);
 	::glPolygonOffset(factor, units);
-	NanReturnUndefined();
 }
 
 //void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid* pixels);
-MODULE_EXPORT_IMPLEMENT(glReadPixels)
+NANX_EXPORT(glReadPixels)
 {
-	NanScope();
-	GLint x = ARG_INT32(0);
-	GLint y = ARG_INT32(1);
-	GLsizei width = ARG_UINT32(2);
-	GLsizei height = ARG_UINT32(3);
-	GLenum format = ARG_UINT32(4);
-	GLenum type = ARG_UINT32(5);
-	GLvoid* pixels = GetTypedArray(ARG_OBJECT(6)); // TODO: length
+	GLint x = NANX_GLint(info[0]);
+	GLint y = NANX_GLint(info[1]);
+	GLsizei width = NANX_GLsizei(info[2]);
+	GLsizei height = NANX_GLsizei(info[3]);
+	GLenum format = NANX_GLenum(info[4]);
+	GLenum type = NANX_GLenum(info[5]);
+	size_t byte_length = 0;
+	switch (type)
+	{
+	case GL_UNSIGNED_BYTE:
+		switch (format)
+		{
+		case GL_ALPHA:	byte_length = 1; break;
+		case GL_RGB:	byte_length = 3; break;
+		case GL_RGBA:	byte_length = 4; break;
+		}
+		break;
+	case GL_UNSIGNED_SHORT_5_6_5:
+	case GL_UNSIGNED_SHORT_4_4_4_4:
+	case GL_UNSIGNED_SHORT_5_5_5_1:
+		byte_length = 2;
+		break;
+	}
+	byte_length *= width * height;
+	GLvoid* pixels = GetArrayBufferViewData(info[6], byte_length);
 	::glReadPixels(x, y, width, height, format, type, pixels);
-	NanReturnUndefined();
 }
 
 //void glReleaseShaderCompiler(void);
-MODULE_EXPORT_IMPLEMENT(glReleaseShaderCompiler)
+NANX_EXPORT(glReleaseShaderCompiler)
 {
-	NanScope();
 	::glReleaseShaderCompiler();
-	NanReturnUndefined();
 }
 
 //void glRenderbufferStorage(GLenum target, GLenum internalformat, GLsizei width, GLsizei height);
-MODULE_EXPORT_IMPLEMENT(glRenderbufferStorage)
+NANX_EXPORT(glRenderbufferStorage)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum internalformat = ARG_UINT32(1);
-	GLsizei width = ARG_UINT32(2);
-	GLsizei height = ARG_UINT32(3);
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum internalformat = NANX_GLenum(info[1]);
+	GLsizei width = NANX_GLsizei(info[2]);
+	GLsizei height = NANX_GLsizei(info[3]);
 	::glRenderbufferStorage(target, internalformat, width, height);
-	NanReturnUndefined();
 }
 
 //void glSampleCoverage(GLclampf value, GLboolean invert);
-MODULE_EXPORT_IMPLEMENT(glSampleCoverage)
+NANX_EXPORT(glSampleCoverage)
 {
-	NanScope();
-	GLclampf value = (GLclampf) ARG_NUMBER(0);
-	GLboolean invert = ARG_BOOLEAN(1);
+	GLclampf value = NANX_GLclampf(info[0]);
+	GLboolean invert = NANX_GLboolean(info[1]);
 	::glSampleCoverage(value, invert);
-	NanReturnUndefined();
 }
 
 //void glScissor(GLint x, GLint y, GLsizei width, GLsizei height);
-MODULE_EXPORT_IMPLEMENT(glScissor)
+NANX_EXPORT(glScissor)
 {
-	NanScope();
-	GLint x = ARG_INT32(0);
-	GLint y = ARG_INT32(1);
-	GLsizei width = ARG_UINT32(2);
-	GLsizei height = ARG_UINT32(3);
+	GLint x = NANX_GLint(info[0]);
+	GLint y = NANX_GLint(info[1]);
+	GLsizei width = NANX_GLsizei(info[2]);
+	GLsizei height = NANX_GLsizei(info[3]);
 	::glScissor(x, y, width, height);
-	NanReturnUndefined();
 }
 
 //void glShaderBinary(GLsizei n, const GLuint* shaders, GLenum binaryformat, const GLvoid* binary, GLsizei length);
-MODULE_EXPORT_IMPLEMENT(glShaderBinary)
+NANX_EXPORT(glShaderBinary)
 {
-	NanScope();
-	GLsizei n = ARG_UINT32(0);
-	const GLuint* shaders = (const GLuint*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(1), n);
-	GLenum binaryformat = ARG_UINT32(2);
-	GLsizei length = ARG_UINT32(4);
-	const GLvoid* binary = (const GLvoid*) GetTypedArray<kExternalUnsignedIntArray>(ARG_OBJECT(3), length);
+	GLsizei n = NANX_GLsizei(info[0]);
+	const GLuint* shaders = (const GLuint*) GetUint32ArrayData(info[1], n);
+	GLenum binaryformat = NANX_GLenum(info[2]);
+	GLsizei length = NANX_GLsizei(info[4]);
+	const GLvoid* binary = (const GLvoid*) GetUint32ArrayData(info[3], length);
 	::glShaderBinary(n, shaders, binaryformat, binary, length);
-	NanReturnUndefined();
 }
 
 //void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length);
-MODULE_EXPORT_IMPLEMENT(glShaderSource)
+NANX_EXPORT(glShaderSource)
 {
-	NanScope();
-	GLuint shader = ARG_UINT32(0);
-	GLsizei count = ARG_UINT32(1);
-	Handle<Array> _string = ARG_ARRAY(2);
-	Handle<Array> _length = ARG_ARRAY(3);
+	GLuint shader = NANX_GLuint(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	v8::Local<v8::Array> _string = v8::Local<v8::Array>::Cast(info[2]);
+	v8::Local<v8::Array> _length = v8::Local<v8::Array>::Cast(info[3]);
 	GLchar** string = (GLchar**) malloc(count * sizeof(GLchar*));
 	GLint* length = (GLint*) malloc(count * sizeof(GLint));
 	for (int i = 0; i < count; ++i)
 	{
-		Handle<String> str = Handle<String>::Cast(_string->Get(i));
-		Handle<Integer> len = Handle<Integer>::Cast(_length->Get(i));
-		string[i] = strdup(*String::Utf8Value(str));
+		v8::Local<v8::String> str = v8::Local<v8::String>::Cast(_string->Get(i));
+		v8::Local<v8::Integer> len = v8::Local<v8::Integer>::Cast(_length->Get(i));
+		string[i] = strdup(*v8::String::Utf8Value(str));
 		length[i] = len->Int32Value();
 	}
 	::glShaderSource(shader, count, (const GLchar**) string, length);
@@ -1257,975 +1198,878 @@ MODULE_EXPORT_IMPLEMENT(glShaderSource)
 	}
 	free(string);
 	free(length);
-	NanReturnUndefined();
 }
 
 //void glStencilFunc(GLenum func, GLint ref, GLuint mask);
-MODULE_EXPORT_IMPLEMENT(glStencilFunc)
+NANX_EXPORT(glStencilFunc)
 {
-	NanScope();
-	GLenum func = ARG_UINT32(0);
-	GLint ref = ARG_INT32(1);
-	GLuint mask = ARG_UINT32(2);
+	GLenum func = NANX_GLenum(info[0]);
+	GLint ref = NANX_GLint(info[1]);
+	GLuint mask = NANX_GLuint(info[2]);
 	::glStencilFunc(func, ref, mask);
-	NanReturnUndefined();
 }
 
 //void glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask);
-MODULE_EXPORT_IMPLEMENT(glStencilFuncSeparate)
+NANX_EXPORT(glStencilFuncSeparate)
 {
-	NanScope();
-	GLenum face = ARG_UINT32(0);
-	GLenum func = ARG_UINT32(1);
-	GLint ref = ARG_INT32(2);
-	GLuint mask = ARG_UINT32(3);
+	GLenum face = NANX_GLenum(info[0]);
+	GLenum func = NANX_GLenum(info[1]);
+	GLint ref = NANX_GLint(info[2]);
+	GLuint mask = NANX_GLuint(info[3]);
 	::glStencilFuncSeparate(face, func, ref, mask);
-	NanReturnUndefined();
 }
 
 //void glStencilMask(GLuint mask);
-MODULE_EXPORT_IMPLEMENT(glStencilMask)
+NANX_EXPORT(glStencilMask)
 {
-	NanScope();
-	GLuint mask = ARG_UINT32(0);
+	GLuint mask = NANX_GLuint(info[0]);
 	::glStencilMask(mask);
-	NanReturnUndefined();
 }
 
 //void glStencilMaskSeparate(GLenum face, GLuint mask);
-MODULE_EXPORT_IMPLEMENT(glStencilMaskSeparate)
+NANX_EXPORT(glStencilMaskSeparate)
 {
-	NanScope();
-	GLenum face = ARG_UINT32(0);
-	GLuint mask = ARG_UINT32(1);
+	GLenum face = NANX_GLenum(info[0]);
+	GLuint mask = NANX_GLuint(info[1]);
 	::glStencilMaskSeparate(face, mask);
-	NanReturnUndefined();
 }
 
 //void glStencilOp(GLenum fail, GLenum zfail, GLenum zpass);
-MODULE_EXPORT_IMPLEMENT(glStencilOp)
+NANX_EXPORT(glStencilOp)
 {
-	NanScope();
-	GLenum fail = ARG_UINT32(0);
-	GLenum zfail = ARG_UINT32(1);
-	GLenum zpass = ARG_UINT32(2);
+	GLenum fail = NANX_GLenum(info[0]);
+	GLenum zfail = NANX_GLenum(info[1]);
+	GLenum zpass = NANX_GLenum(info[2]);
 	::glStencilOp(fail, zfail, zpass);
-	NanReturnUndefined();
 }
 
 //void glStencilOpSeparate(GLenum face, GLenum fail, GLenum zfail, GLenum zpass);
-MODULE_EXPORT_IMPLEMENT(glStencilOpSeparate)
+NANX_EXPORT(glStencilOpSeparate)
 {
-	NanScope();
-	GLenum face = ARG_UINT32(0);
-	GLenum fail = ARG_UINT32(1);
-	GLenum zfail = ARG_UINT32(2);
-	GLenum zpass = ARG_UINT32(3);
+	GLenum face = NANX_GLenum(info[0]);
+	GLenum fail = NANX_GLenum(info[1]);
+	GLenum zfail = NANX_GLenum(info[2]);
+	GLenum zpass = NANX_GLenum(info[3]);
 	::glStencilOpSeparate(face, fail, zfail, zpass);
-	NanReturnUndefined();
 }
 
 //void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* pixels);
-MODULE_EXPORT_IMPLEMENT(glTexImage2D)
+NANX_EXPORT(glTexImage2D)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLint level = ARG_INT32(1);
-	GLint internalformat = ARG_INT32(2);
-	GLsizei width = ARG_UINT32(3);
-	GLsizei height = ARG_UINT32(4);
-	GLint border = ARG_INT32(5);
-	GLenum format = ARG_UINT32(6);
-	GLenum type = ARG_UINT32(7);
-	const GLvoid* pixels = GetTypedArray(ARG_OBJECT(8)); // TODO: length
+	GLenum target = NANX_GLenum(info[0]);
+	GLint level = NANX_GLint(info[1]);
+	GLint internalformat = NANX_GLint(info[2]);
+	GLsizei width = NANX_GLsizei(info[3]);
+	GLsizei height = NANX_GLsizei(info[4]);
+	GLint border = NANX_GLint(info[5]);
+	GLenum format = NANX_GLenum(info[6]);
+	GLenum type = NANX_GLenum(info[7]);
+	const GLvoid* pixels = GetArrayBufferViewData(info[8]); // TODO: byte_length
 	::glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels); // TODO
-	NanReturnUndefined();
 }
 
 //void glTexParameterf(GLenum target, GLenum pname, GLfloat param);
-MODULE_EXPORT_IMPLEMENT(glTexParameterf)
+NANX_EXPORT(glTexParameterf)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	GLfloat param = (GLfloat) ARG_NUMBER(2);
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	GLfloat param = NANX_GLfloat(info[2]);
 	::glTexParameterf(target, pname, param);
-	NanReturnUndefined();
 }
 
 //void glTexParameterfv(GLenum target, GLenum pname, const GLfloat* params);
-MODULE_EXPORT_IMPLEMENT(glTexParameterfv)
+NANX_EXPORT(glTexParameterfv)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	const GLfloat* params = (const GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(2)); // TODO: length
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	const GLfloat* params = static_cast<const GLfloat*>(GetFloat32ArrayData(info[2])); // TODO: length
 	::glTexParameterfv(target, pname, params);
-	NanReturnUndefined();
 }
 
 //void glTexParameteri(GLenum target, GLenum pname, GLint param);
-MODULE_EXPORT_IMPLEMENT(glTexParameteri)
+NANX_EXPORT(glTexParameteri)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	GLint param = ARG_INT32(2);
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	GLint param = NANX_GLint(info[2]);
 	::glTexParameteri(target, pname, param);
-	NanReturnUndefined();
 }
 
 //void glTexParameteriv(GLenum target, GLenum pname, const GLint* params);
-MODULE_EXPORT_IMPLEMENT(glTexParameteriv)
+NANX_EXPORT(glTexParameteriv)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLenum pname = ARG_UINT32(1);
-	const GLint* params = (const GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(2)); // TODO: length
+	GLenum target = NANX_GLenum(info[0]);
+	GLenum pname = NANX_GLenum(info[1]);
+	const GLint* params = static_cast<const GLint*>(GetInt32ArrayData(info[2])); // TODO: length
 	::glTexParameteriv(target, pname, params);
-	NanReturnUndefined();
 }
 
 //void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid* pixels);
-MODULE_EXPORT_IMPLEMENT(glTexSubImage2D)
+NANX_EXPORT(glTexSubImage2D)
 {
-	NanScope();
-	GLenum target = ARG_UINT32(0);
-	GLint level = ARG_INT32(1);
-	GLint xoffset = ARG_INT32(2);
-	GLint yoffset = ARG_INT32(3);
-	GLsizei width = ARG_UINT32(4);
-	GLsizei height = ARG_UINT32(5);
-	GLenum format = ARG_UINT32(6);
-	GLenum type = ARG_UINT32(7);
-	const GLvoid* pixels = GetTypedArray(ARG_OBJECT(8)); // TODO: length
+	GLenum target = NANX_GLenum(info[0]);
+	GLint level = NANX_GLint(info[1]);
+	GLint xoffset = NANX_GLint(info[2]);
+	GLint yoffset = NANX_GLint(info[3]);
+	GLsizei width = NANX_GLsizei(info[4]);
+	GLsizei height = NANX_GLsizei(info[5]);
+	GLenum format = NANX_GLenum(info[6]);
+	GLenum type = NANX_GLenum(info[7]);
+	const GLvoid* pixels = GetArrayBufferViewData(info[8]); // TODO: byte_length
 	::glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels); // TODO
-	NanReturnUndefined();
 }
 
 //void glUniform1f(GLint location, GLfloat x);
-MODULE_EXPORT_IMPLEMENT(glUniform1f)
+NANX_EXPORT(glUniform1f)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLfloat x = (GLfloat) ARG_NUMBER(1);
+	GLint location = NANX_GLint(info[0]);
+	GLfloat x = NANX_GLfloat(info[1]);
 	::glUniform1f(location, x);
-	NanReturnUndefined();
 }
 
 //void glUniform1fv(GLint location, GLsizei count, const GLfloat* v);
-MODULE_EXPORT_IMPLEMENT(glUniform1fv)
+NANX_EXPORT(glUniform1fv)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLsizei count = ARG_UINT32(1);
-	const GLfloat* v = (const GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(2), count);
+	GLint location = NANX_GLint(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	const GLfloat* v = (const GLfloat*) GetFloat32ArrayData(info[2], count);
 	::glUniform1fv(location, count, v);
-	NanReturnUndefined();
 }
 
 //void glUniform1i(GLint location, GLint x);
-MODULE_EXPORT_IMPLEMENT(glUniform1i)
+NANX_EXPORT(glUniform1i)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLint x = ARG_INT32(1);
+	GLint location = NANX_GLint(info[0]);
+	GLint x = NANX_GLint(info[1]);
 	::glUniform1i(location, x);
-	NanReturnUndefined();
 }
 
 //void glUniform1iv(GLint location, GLsizei count, const GLint* v);
-MODULE_EXPORT_IMPLEMENT(glUniform1iv)
+NANX_EXPORT(glUniform1iv)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLsizei count = ARG_UINT32(1);
-	const GLint* v = (const GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(2), count);
+	GLint location = NANX_GLint(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	const GLint* v = (const GLint*) GetInt32ArrayData(info[2], count);
 	::glUniform1iv(location, count, v);
-	NanReturnUndefined();
 }
 
 //void glUniform2f(GLint location, GLfloat x, GLfloat y);
-MODULE_EXPORT_IMPLEMENT(glUniform2f)
+NANX_EXPORT(glUniform2f)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLfloat x = (GLfloat) ARG_NUMBER(1);
-	GLfloat y = (GLfloat) ARG_NUMBER(2);
+	GLint location = NANX_GLint(info[0]);
+	GLfloat x = NANX_GLfloat(info[1]);
+	GLfloat y = NANX_GLfloat(info[2]);
 	::glUniform2f(location, x, y);
-	NanReturnUndefined();
 }
 
 //void glUniform2fv(GLint location, GLsizei count, const GLfloat* v);
-MODULE_EXPORT_IMPLEMENT(glUniform2fv)
+NANX_EXPORT(glUniform2fv)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLsizei count = ARG_UINT32(1);
-	const GLfloat* v = (const GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(2), count * 2);
+	GLint location = NANX_GLint(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	const GLfloat* v = (const GLfloat*) GetFloat32ArrayData(info[2], count * 2);
 	::glUniform2fv(location, count, v);
-	NanReturnUndefined();
 }
 
 //void glUniform2i(GLint location, GLint x, GLint y);
-MODULE_EXPORT_IMPLEMENT(glUniform2i)
+NANX_EXPORT(glUniform2i)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLint x = ARG_INT32(1);
-	GLint y = ARG_INT32(2);
+	GLint location = NANX_GLint(info[0]);
+	GLint x = NANX_GLint(info[1]);
+	GLint y = NANX_GLint(info[2]);
 	::glUniform2i(location, x, y);
-	NanReturnUndefined();
 }
 
 //void glUniform2iv(GLint location, GLsizei count, const GLint* v);
-MODULE_EXPORT_IMPLEMENT(glUniform2iv)
+NANX_EXPORT(glUniform2iv)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLsizei count = ARG_UINT32(1);
-	const GLint* v = (const GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(2), count * 2);
+	GLint location = NANX_GLint(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	const GLint* v = (const GLint*) GetInt32ArrayData(info[2], count * 2);
 	::glUniform2iv(location, count, v);
-	NanReturnUndefined();
 }
 
 //void glUniform3f(GLint location, GLfloat x, GLfloat y, GLfloat z);
-MODULE_EXPORT_IMPLEMENT(glUniform3f)
+NANX_EXPORT(glUniform3f)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLfloat x = (GLfloat) ARG_NUMBER(1);
-	GLfloat y = (GLfloat) ARG_NUMBER(2);
-	GLfloat z = (GLfloat) ARG_NUMBER(3);
+	GLint location = NANX_GLint(info[0]);
+	GLfloat x = NANX_GLfloat(info[1]);
+	GLfloat y = NANX_GLfloat(info[2]);
+	GLfloat z = NANX_GLfloat(info[3]);
 	::glUniform3f(location, x, y, z);
-	NanReturnUndefined();
 }
 
 //void glUniform3fv(GLint location, GLsizei count, const GLfloat* v);
-MODULE_EXPORT_IMPLEMENT(glUniform3fv)
+NANX_EXPORT(glUniform3fv)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLsizei count = ARG_UINT32(1);
-	const GLfloat* v = (const GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(2), count * 3);
+	GLint location = NANX_GLint(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	const GLfloat* v = (const GLfloat*) GetFloat32ArrayData(info[2], count * 3);
 	::glUniform3fv(location, count, v);
-	NanReturnUndefined();
 }
 
 //void glUniform3i(GLint location, GLint x, GLint y, GLint z);
-MODULE_EXPORT_IMPLEMENT(glUniform3i)
+NANX_EXPORT(glUniform3i)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLint x = ARG_INT32(1);
-	GLint y = ARG_INT32(2);
-	GLint z = ARG_INT32(3);
+	GLint location = NANX_GLint(info[0]);
+	GLint x = NANX_GLint(info[1]);
+	GLint y = NANX_GLint(info[2]);
+	GLint z = NANX_GLint(info[3]);
 	::glUniform3i(location, x, y, z);
-	NanReturnUndefined();
 }
 
 //void glUniform3iv(GLint location, GLsizei count, const GLint* v);
-MODULE_EXPORT_IMPLEMENT(glUniform3iv)
+NANX_EXPORT(glUniform3iv)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLsizei count = ARG_UINT32(1);
-	const GLint* v = (const GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(2), count * 3);
+	GLint location = NANX_GLint(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	const GLint* v = (const GLint*) GetInt32ArrayData(info[2], count * 3);
 	::glUniform3iv(location, count, v);
-	NanReturnUndefined();
 }
 
 //void glUniform4f(GLint location, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
-MODULE_EXPORT_IMPLEMENT(glUniform4f)
+NANX_EXPORT(glUniform4f)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLfloat x = (GLfloat) ARG_NUMBER(1);
-	GLfloat y = (GLfloat) ARG_NUMBER(2);
-	GLfloat z = (GLfloat) ARG_NUMBER(3);
-	GLfloat w = (GLfloat) ARG_NUMBER(4);
+	GLint location = NANX_GLint(info[0]);
+	GLfloat x = NANX_GLfloat(info[1]);
+	GLfloat y = NANX_GLfloat(info[2]);
+	GLfloat z = NANX_GLfloat(info[3]);
+	GLfloat w = NANX_GLfloat(info[4]);
 	::glUniform4f(location, x, y, z, w);
-	NanReturnUndefined();
 }
 
 //void glUniform4fv(GLint location, GLsizei count, const GLfloat* v);
-MODULE_EXPORT_IMPLEMENT(glUniform4fv)
+NANX_EXPORT(glUniform4fv)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLsizei count = ARG_UINT32(1);
-	const GLfloat* v = (const GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(2), count * 4);
+	GLint location = NANX_GLint(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	const GLfloat* v = (const GLfloat*) GetFloat32ArrayData(info[2], count * 4);
 	::glUniform4fv(location, count, v);
-	NanReturnUndefined();
 }
 
 //void glUniform4i(GLint location, GLint x, GLint y, GLint z, GLint w);
-MODULE_EXPORT_IMPLEMENT(glUniform4i)
+NANX_EXPORT(glUniform4i)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLint x = ARG_INT32(1);
-	GLint y = ARG_INT32(2);
-	GLint z = ARG_INT32(3);
-	GLint w = ARG_INT32(4);
+	GLint location = NANX_GLint(info[0]);
+	GLint x = NANX_GLint(info[1]);
+	GLint y = NANX_GLint(info[2]);
+	GLint z = NANX_GLint(info[3]);
+	GLint w = NANX_GLint(info[4]);
 	::glUniform4i(location, x, y, z, w);
-	NanReturnUndefined();
 }
 
 //void glUniform4iv(GLint location, GLsizei count, const GLint* v);
-MODULE_EXPORT_IMPLEMENT(glUniform4iv)
+NANX_EXPORT(glUniform4iv)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLsizei count = ARG_UINT32(1);
-	const GLint* v = (const GLint*) GetTypedArray<kExternalIntArray>(ARG_OBJECT(2), count * 4);
+	GLint location = NANX_GLint(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	const GLint* v = (const GLint*) GetInt32ArrayData(info[2], count * 4);
 	::glUniform4iv(location, count, v);
-	NanReturnUndefined();
 }
 
 //void glUniformMatrix2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
-MODULE_EXPORT_IMPLEMENT(glUniformMatrix2fv)
+NANX_EXPORT(glUniformMatrix2fv)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLsizei count = ARG_UINT32(1);
-	GLboolean transpose = ARG_BOOLEAN(2);
-	const GLfloat* value = (const GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(3), count * 4);
+	GLint location = NANX_GLint(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	GLboolean transpose = NANX_GLboolean(info[2]);
+	const GLfloat* value = (const GLfloat*) GetFloat32ArrayData(info[3], count * 4);
 	::glUniformMatrix2fv(location, count, transpose, value);
-	NanReturnUndefined();
 }
 
 //void glUniformMatrix3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
-MODULE_EXPORT_IMPLEMENT(glUniformMatrix3fv)
+NANX_EXPORT(glUniformMatrix3fv)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLsizei count = ARG_UINT32(1);
-	GLboolean transpose = ARG_BOOLEAN(2);
-	const GLfloat* value = (const GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(3), count * 9);
+	GLint location = NANX_GLint(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	GLboolean transpose = NANX_GLboolean(info[2]);
+	const GLfloat* value = (const GLfloat*) GetFloat32ArrayData(info[3], count * 9);
 	::glUniformMatrix3fv(location, count, transpose, value);
-	NanReturnUndefined();
 }
 
 //void glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
-MODULE_EXPORT_IMPLEMENT(glUniformMatrix4fv)
+NANX_EXPORT(glUniformMatrix4fv)
 {
-	NanScope();
-	GLint location = ARG_INT32(0);
-	GLsizei count = ARG_UINT32(1);
-	GLboolean transpose = ARG_BOOLEAN(2);
-	const GLfloat* value = (const GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(3), count * 16);
+	GLint location = NANX_GLint(info[0]);
+	GLsizei count = NANX_GLsizei(info[1]);
+	GLboolean transpose = NANX_GLboolean(info[2]);
+	const GLfloat* value = (const GLfloat*) GetFloat32ArrayData(info[3], count * 16);
 	::glUniformMatrix4fv(location, count, transpose, value);
-	NanReturnUndefined();
 }
 
 //void glUseProgram(GLuint program);
-MODULE_EXPORT_IMPLEMENT(glUseProgram)
+NANX_EXPORT(glUseProgram)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
+	GLuint program = NANX_GLuint(info[0]);
 	::glUseProgram(program);
-	NanReturnUndefined();
 }
 
 //void glValidateProgram(GLuint program);
-MODULE_EXPORT_IMPLEMENT(glValidateProgram)
+NANX_EXPORT(glValidateProgram)
 {
-	NanScope();
-	GLuint program = ARG_UINT32(0);
+	GLuint program = NANX_GLuint(info[0]);
 	::glValidateProgram(program);
-	NanReturnUndefined();
 }
 
 //void glVertexAttrib1f(GLuint indx, GLfloat x);
-MODULE_EXPORT_IMPLEMENT(glVertexAttrib1f)
+NANX_EXPORT(glVertexAttrib1f)
 {
-	NanScope();
-	GLuint indx = ARG_UINT32(0);
-	GLfloat x = (GLfloat) ARG_NUMBER(1);
+	GLuint indx = NANX_GLuint(info[0]);
+	GLfloat x = NANX_GLfloat(info[1]);
 	::glVertexAttrib1f(indx, x);
-	NanReturnUndefined();
 }
 
 //void glVertexAttrib1fv(GLuint indx, const GLfloat* values);
-MODULE_EXPORT_IMPLEMENT(glVertexAttrib1fv)
+NANX_EXPORT(glVertexAttrib1fv)
 {
-	NanScope();
-	GLuint indx = ARG_UINT32(0);
-	const GLfloat* values = (const GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(1), 1);
+	GLuint indx = NANX_GLuint(info[0]);
+	const GLfloat* values = (const GLfloat*) GetFloat32ArrayData(info[1], 1);
 	::glVertexAttrib1fv(indx, values);
-	NanReturnUndefined();
 }
 
 //void glVertexAttrib2f(GLuint indx, GLfloat x, GLfloat y);
-MODULE_EXPORT_IMPLEMENT(glVertexAttrib2f)
+NANX_EXPORT(glVertexAttrib2f)
 {
-	NanScope();
-	GLuint indx = ARG_UINT32(0);
-	GLfloat x = (GLfloat) ARG_NUMBER(1);
-	GLfloat y = (GLfloat) ARG_NUMBER(2);
+	GLuint indx = NANX_GLuint(info[0]);
+	GLfloat x = NANX_GLfloat(info[1]);
+	GLfloat y = NANX_GLfloat(info[2]);
 	::glVertexAttrib2f(indx, x, y);
-	NanReturnUndefined();
 }
 
 //void glVertexAttrib2fv(GLuint indx, const GLfloat* values);
-MODULE_EXPORT_IMPLEMENT(glVertexAttrib2fv)
+NANX_EXPORT(glVertexAttrib2fv)
 {
-	NanScope();
-	GLuint indx = ARG_UINT32(0);
-	const GLfloat* values = (const GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(1), 2);
+	GLuint indx = NANX_GLuint(info[0]);
+	const GLfloat* values = (const GLfloat*) GetFloat32ArrayData(info[1], 2);
 	::glVertexAttrib2fv(indx, values);
-	NanReturnUndefined();
 }
 
 //void glVertexAttrib3f(GLuint indx, GLfloat x, GLfloat y, GLfloat z);
-MODULE_EXPORT_IMPLEMENT(glVertexAttrib3f)
+NANX_EXPORT(glVertexAttrib3f)
 {
-	NanScope();
-	GLuint indx = ARG_UINT32(0);
-	GLfloat x = (GLfloat) ARG_NUMBER(1);
-	GLfloat y = (GLfloat) ARG_NUMBER(2);
-	GLfloat z = (GLfloat) ARG_NUMBER(3);
+	GLuint indx = NANX_GLuint(info[0]);
+	GLfloat x = NANX_GLfloat(info[1]);
+	GLfloat y = NANX_GLfloat(info[2]);
+	GLfloat z = NANX_GLfloat(info[3]);
 	::glVertexAttrib3f(indx, x, y, z);
-	NanReturnUndefined();
 }
 
 //void glVertexAttrib3fv(GLuint indx, const GLfloat* values);
-MODULE_EXPORT_IMPLEMENT(glVertexAttrib3fv)
+NANX_EXPORT(glVertexAttrib3fv)
 {
-	NanScope();
-	GLuint indx = ARG_UINT32(0);
-	const GLfloat* values = (const GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(1), 3);
+	GLuint indx = NANX_GLuint(info[0]);
+	const GLfloat* values = (const GLfloat*) GetFloat32ArrayData(info[1], 3);
 	::glVertexAttrib3fv(indx, values);
-	NanReturnUndefined();
 }
 
 //void glVertexAttrib4f(GLuint indx, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
-MODULE_EXPORT_IMPLEMENT(glVertexAttrib4f)
+NANX_EXPORT(glVertexAttrib4f)
 {
-	NanScope();
-	GLuint indx = ARG_UINT32(0);
-	GLfloat x = (GLfloat) ARG_NUMBER(1);
-	GLfloat y = (GLfloat) ARG_NUMBER(2);
-	GLfloat z = (GLfloat) ARG_NUMBER(3);
-	GLfloat w = (GLfloat) ARG_NUMBER(4);
+	GLuint indx = NANX_GLuint(info[0]);
+	GLfloat x = NANX_GLfloat(info[1]);
+	GLfloat y = NANX_GLfloat(info[2]);
+	GLfloat z = NANX_GLfloat(info[3]);
+	GLfloat w = NANX_GLfloat(info[4]);
 	::glVertexAttrib4f(indx, x, y, z, w);
-	NanReturnUndefined();
 }
 
 //void glVertexAttrib4fv(GLuint indx, const GLfloat* values);
-MODULE_EXPORT_IMPLEMENT(glVertexAttrib4fv)
+NANX_EXPORT(glVertexAttrib4fv)
 {
-	NanScope();
-	GLuint indx = ARG_UINT32(0);
-	const GLfloat* values = (const GLfloat*) GetTypedArray<kExternalFloatArray>(ARG_OBJECT(1), 4);
+	GLuint indx = NANX_GLuint(info[0]);
+	const GLfloat* values = (const GLfloat*) GetFloat32ArrayData(info[1], 4);
 	::glVertexAttrib4fv(indx, values);
-	NanReturnUndefined();
 }
 
 //void glVertexAttribPointer(GLuint indx, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const GLvoid* ptr);
-MODULE_EXPORT_IMPLEMENT(glVertexAttribPointer)
+NANX_EXPORT(glVertexAttribPointer)
 {
-	NanScope();
-	GLuint indx = ARG_UINT32(0);
-	GLint size = ARG_INT32(1);
-	GLenum type = ARG_UINT32(2);
-	GLboolean normalized = ARG_BOOLEAN(3);
-	GLsizei stride = ARG_UINT32(4);
-	GLuint offset = ARG_UINT32(5);
+	GLuint indx = NANX_GLuint(info[0]);
+	GLint size = NANX_GLint(info[1]);
+	GLenum type = NANX_GLenum(info[2]);
+	GLboolean normalized = NANX_GLboolean(info[3]);
+	GLsizei stride = NANX_GLsizei(info[4]);
+	GLuint offset = NANX_GLuint(info[5]);
 	const GLvoid* ptr = (const GLvoid*)(((char*)(0)) + offset);
 	::glVertexAttribPointer(indx, size, type, normalized, stride, ptr);
-	NanReturnUndefined();
 }
 
 //void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
-MODULE_EXPORT_IMPLEMENT(glViewport)
+NANX_EXPORT(glViewport)
 {
-	NanScope();
-	GLint x = ARG_INT32(0);
-	GLint y = ARG_INT32(1);
-	GLsizei width = ARG_UINT32(2);
-	GLsizei height = ARG_UINT32(3);
+	GLint x = NANX_GLint(info[0]);
+	GLint y = NANX_GLint(info[1]);
+	GLsizei width = NANX_GLsizei(info[2]);
+	GLsizei height = NANX_GLsizei(info[3]);
 	::glViewport(x, y, width, height);
-	NanReturnUndefined();
 }
 
 #endif // HAVE_OPENGLES2
 
-#if NODE_VERSION_AT_LEAST(0,11,0)
-void init(Handle<Object> exports, Handle<Value> module, Handle<Context> context)
-#else
-void init(Handle<Object> exports/*, Handle<Value> module*/)
-#endif
+NAN_MODULE_INIT(init)
 {
-	NanScope();
 
 	#ifdef HAVE_OPENGLES2
 
-//	MODULE_CONSTANT(exports, GL_ES_VERSION_2_0);
-	MODULE_CONSTANT(exports, GL_DEPTH_BUFFER_BIT);
-	MODULE_CONSTANT(exports, GL_STENCIL_BUFFER_BIT);
-	MODULE_CONSTANT(exports, GL_COLOR_BUFFER_BIT);
-	MODULE_CONSTANT(exports, GL_FALSE);
-	MODULE_CONSTANT(exports, GL_TRUE);
-	MODULE_CONSTANT(exports, GL_POINTS);
-	MODULE_CONSTANT(exports, GL_LINES);
-	MODULE_CONSTANT(exports, GL_LINE_LOOP);
-	MODULE_CONSTANT(exports, GL_LINE_STRIP);
-	MODULE_CONSTANT(exports, GL_TRIANGLES);
-	MODULE_CONSTANT(exports, GL_TRIANGLE_STRIP);
-	MODULE_CONSTANT(exports, GL_TRIANGLE_FAN);
-	MODULE_CONSTANT(exports, GL_ZERO);
-	MODULE_CONSTANT(exports, GL_ONE);
-	MODULE_CONSTANT(exports, GL_SRC_COLOR);
-	MODULE_CONSTANT(exports, GL_ONE_MINUS_SRC_COLOR);
-	MODULE_CONSTANT(exports, GL_SRC_ALPHA);
-	MODULE_CONSTANT(exports, GL_ONE_MINUS_SRC_ALPHA);
-	MODULE_CONSTANT(exports, GL_DST_ALPHA);
-	MODULE_CONSTANT(exports, GL_ONE_MINUS_DST_ALPHA);
-	MODULE_CONSTANT(exports, GL_DST_COLOR);
-	MODULE_CONSTANT(exports, GL_ONE_MINUS_DST_COLOR);
-	MODULE_CONSTANT(exports, GL_SRC_ALPHA_SATURATE);
-	MODULE_CONSTANT(exports, GL_FUNC_ADD);
-	MODULE_CONSTANT(exports, GL_BLEND_EQUATION);
-	MODULE_CONSTANT(exports, GL_BLEND_EQUATION_RGB);
-	MODULE_CONSTANT(exports, GL_BLEND_EQUATION_ALPHA);
-	MODULE_CONSTANT(exports, GL_FUNC_SUBTRACT);
-	MODULE_CONSTANT(exports, GL_FUNC_REVERSE_SUBTRACT);
-	MODULE_CONSTANT(exports, GL_BLEND_DST_RGB);
-	MODULE_CONSTANT(exports, GL_BLEND_SRC_RGB);
-	MODULE_CONSTANT(exports, GL_BLEND_DST_ALPHA);
-	MODULE_CONSTANT(exports, GL_BLEND_SRC_ALPHA);
-	MODULE_CONSTANT(exports, GL_CONSTANT_COLOR);
-	MODULE_CONSTANT(exports, GL_ONE_MINUS_CONSTANT_COLOR);
-	MODULE_CONSTANT(exports, GL_CONSTANT_ALPHA);
-	MODULE_CONSTANT(exports, GL_ONE_MINUS_CONSTANT_ALPHA);
-	MODULE_CONSTANT(exports, GL_BLEND_COLOR);
-	MODULE_CONSTANT(exports, GL_ARRAY_BUFFER);
-	MODULE_CONSTANT(exports, GL_ELEMENT_ARRAY_BUFFER);
-	MODULE_CONSTANT(exports, GL_ARRAY_BUFFER_BINDING);
-	MODULE_CONSTANT(exports, GL_ELEMENT_ARRAY_BUFFER_BINDING);
-	MODULE_CONSTANT(exports, GL_STREAM_DRAW);
-	MODULE_CONSTANT(exports, GL_STATIC_DRAW);
-	MODULE_CONSTANT(exports, GL_DYNAMIC_DRAW);
-	MODULE_CONSTANT(exports, GL_BUFFER_SIZE);
-	MODULE_CONSTANT(exports, GL_BUFFER_USAGE);
-	MODULE_CONSTANT(exports, GL_CURRENT_VERTEX_ATTRIB);
-	MODULE_CONSTANT(exports, GL_FRONT);
-	MODULE_CONSTANT(exports, GL_BACK);
-	MODULE_CONSTANT(exports, GL_FRONT_AND_BACK);
-	MODULE_CONSTANT(exports, GL_TEXTURE_2D);
-	MODULE_CONSTANT(exports, GL_CULL_FACE);
-	MODULE_CONSTANT(exports, GL_BLEND);
-	MODULE_CONSTANT(exports, GL_DITHER);
-	MODULE_CONSTANT(exports, GL_STENCIL_TEST);
-	MODULE_CONSTANT(exports, GL_DEPTH_TEST);
-	MODULE_CONSTANT(exports, GL_SCISSOR_TEST);
-	MODULE_CONSTANT(exports, GL_POLYGON_OFFSET_FILL);
-	MODULE_CONSTANT(exports, GL_SAMPLE_ALPHA_TO_COVERAGE);
-	MODULE_CONSTANT(exports, GL_SAMPLE_COVERAGE);
-	MODULE_CONSTANT(exports, GL_NO_ERROR);
-	MODULE_CONSTANT(exports, GL_INVALID_ENUM);
-	MODULE_CONSTANT(exports, GL_INVALID_VALUE);
-	MODULE_CONSTANT(exports, GL_INVALID_OPERATION);
-	MODULE_CONSTANT(exports, GL_OUT_OF_MEMORY);
-	MODULE_CONSTANT(exports, GL_CW);
-	MODULE_CONSTANT(exports, GL_CCW);
-	MODULE_CONSTANT(exports, GL_LINE_WIDTH);
-	MODULE_CONSTANT(exports, GL_ALIASED_POINT_SIZE_RANGE);
-	MODULE_CONSTANT(exports, GL_ALIASED_LINE_WIDTH_RANGE);
-	MODULE_CONSTANT(exports, GL_CULL_FACE_MODE);
-	MODULE_CONSTANT(exports, GL_FRONT_FACE);
-	MODULE_CONSTANT(exports, GL_DEPTH_RANGE);
-	MODULE_CONSTANT(exports, GL_DEPTH_WRITEMASK);
-	MODULE_CONSTANT(exports, GL_DEPTH_CLEAR_VALUE);
-	MODULE_CONSTANT(exports, GL_DEPTH_FUNC);
-	MODULE_CONSTANT(exports, GL_STENCIL_CLEAR_VALUE);
-	MODULE_CONSTANT(exports, GL_STENCIL_FUNC);
-	MODULE_CONSTANT(exports, GL_STENCIL_FAIL);
-	MODULE_CONSTANT(exports, GL_STENCIL_PASS_DEPTH_FAIL);
-	MODULE_CONSTANT(exports, GL_STENCIL_PASS_DEPTH_PASS);
-	MODULE_CONSTANT(exports, GL_STENCIL_REF);
-	MODULE_CONSTANT(exports, GL_STENCIL_VALUE_MASK);
-	MODULE_CONSTANT(exports, GL_STENCIL_WRITEMASK);
-	MODULE_CONSTANT(exports, GL_STENCIL_BACK_FUNC);
-	MODULE_CONSTANT(exports, GL_STENCIL_BACK_FAIL);
-	MODULE_CONSTANT(exports, GL_STENCIL_BACK_PASS_DEPTH_FAIL);
-	MODULE_CONSTANT(exports, GL_STENCIL_BACK_PASS_DEPTH_PASS);
-	MODULE_CONSTANT(exports, GL_STENCIL_BACK_REF);
-	MODULE_CONSTANT(exports, GL_STENCIL_BACK_VALUE_MASK);
-	MODULE_CONSTANT(exports, GL_STENCIL_BACK_WRITEMASK);
-	MODULE_CONSTANT(exports, GL_VIEWPORT);
-	MODULE_CONSTANT(exports, GL_SCISSOR_BOX);
-	MODULE_CONSTANT(exports, GL_COLOR_CLEAR_VALUE);
-	MODULE_CONSTANT(exports, GL_COLOR_WRITEMASK);
-	MODULE_CONSTANT(exports, GL_UNPACK_ALIGNMENT);
-	MODULE_CONSTANT(exports, GL_PACK_ALIGNMENT);
-	MODULE_CONSTANT(exports, GL_MAX_TEXTURE_SIZE);
-	MODULE_CONSTANT(exports, GL_MAX_VIEWPORT_DIMS);
-	MODULE_CONSTANT(exports, GL_SUBPIXEL_BITS);
-	MODULE_CONSTANT(exports, GL_RED_BITS);
-	MODULE_CONSTANT(exports, GL_GREEN_BITS);
-	MODULE_CONSTANT(exports, GL_BLUE_BITS);
-	MODULE_CONSTANT(exports, GL_ALPHA_BITS);
-	MODULE_CONSTANT(exports, GL_DEPTH_BITS);
-	MODULE_CONSTANT(exports, GL_STENCIL_BITS);
-	MODULE_CONSTANT(exports, GL_POLYGON_OFFSET_UNITS);
-	MODULE_CONSTANT(exports, GL_POLYGON_OFFSET_FACTOR);
-	MODULE_CONSTANT(exports, GL_TEXTURE_BINDING_2D);
-	MODULE_CONSTANT(exports, GL_SAMPLE_BUFFERS);
-	MODULE_CONSTANT(exports, GL_SAMPLES);
-	MODULE_CONSTANT(exports, GL_SAMPLE_COVERAGE_VALUE);
-	MODULE_CONSTANT(exports, GL_SAMPLE_COVERAGE_INVERT);
-	MODULE_CONSTANT(exports, GL_NUM_COMPRESSED_TEXTURE_FORMATS);
-	MODULE_CONSTANT(exports, GL_COMPRESSED_TEXTURE_FORMATS);
-	MODULE_CONSTANT(exports, GL_DONT_CARE);
-	MODULE_CONSTANT(exports, GL_FASTEST);
-	MODULE_CONSTANT(exports, GL_NICEST);
-	MODULE_CONSTANT(exports, GL_GENERATE_MIPMAP_HINT);
-	MODULE_CONSTANT(exports, GL_BYTE);
-	MODULE_CONSTANT(exports, GL_UNSIGNED_BYTE);
-	MODULE_CONSTANT(exports, GL_SHORT);
-	MODULE_CONSTANT(exports, GL_UNSIGNED_SHORT);
-	MODULE_CONSTANT(exports, GL_INT);
-	MODULE_CONSTANT(exports, GL_UNSIGNED_INT);
-	MODULE_CONSTANT(exports, GL_FLOAT);
-	MODULE_CONSTANT(exports, GL_FIXED);
-	MODULE_CONSTANT(exports, GL_DEPTH_COMPONENT);
-	MODULE_CONSTANT(exports, GL_ALPHA);
-	MODULE_CONSTANT(exports, GL_RGB);
-	MODULE_CONSTANT(exports, GL_RGBA);
-	MODULE_CONSTANT(exports, GL_LUMINANCE);
-	MODULE_CONSTANT(exports, GL_LUMINANCE_ALPHA);
-	MODULE_CONSTANT(exports, GL_UNSIGNED_SHORT_4_4_4_4);
-	MODULE_CONSTANT(exports, GL_UNSIGNED_SHORT_5_5_5_1);
-	MODULE_CONSTANT(exports, GL_UNSIGNED_SHORT_5_6_5);
-	MODULE_CONSTANT(exports, GL_FRAGMENT_SHADER);
-	MODULE_CONSTANT(exports, GL_VERTEX_SHADER);
-	MODULE_CONSTANT(exports, GL_MAX_VERTEX_ATTRIBS);
-	MODULE_CONSTANT(exports, GL_MAX_VERTEX_UNIFORM_VECTORS);
-	MODULE_CONSTANT(exports, GL_MAX_VARYING_VECTORS);
-	MODULE_CONSTANT(exports, GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS);
-	MODULE_CONSTANT(exports, GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS);
-	MODULE_CONSTANT(exports, GL_MAX_TEXTURE_IMAGE_UNITS);
-	MODULE_CONSTANT(exports, GL_MAX_FRAGMENT_UNIFORM_VECTORS);
-	MODULE_CONSTANT(exports, GL_SHADER_TYPE);
-	MODULE_CONSTANT(exports, GL_DELETE_STATUS);
-	MODULE_CONSTANT(exports, GL_LINK_STATUS);
-	MODULE_CONSTANT(exports, GL_VALIDATE_STATUS);
-	MODULE_CONSTANT(exports, GL_ATTACHED_SHADERS);
-	MODULE_CONSTANT(exports, GL_ACTIVE_UNIFORMS);
-	MODULE_CONSTANT(exports, GL_ACTIVE_UNIFORM_MAX_LENGTH);
-	MODULE_CONSTANT(exports, GL_ACTIVE_ATTRIBUTES);
-	MODULE_CONSTANT(exports, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH);
-	MODULE_CONSTANT(exports, GL_SHADING_LANGUAGE_VERSION);
-	MODULE_CONSTANT(exports, GL_CURRENT_PROGRAM);
-	MODULE_CONSTANT(exports, GL_NEVER);
-	MODULE_CONSTANT(exports, GL_LESS);
-	MODULE_CONSTANT(exports, GL_EQUAL);
-	MODULE_CONSTANT(exports, GL_LEQUAL);
-	MODULE_CONSTANT(exports, GL_GREATER);
-	MODULE_CONSTANT(exports, GL_NOTEQUAL);
-	MODULE_CONSTANT(exports, GL_GEQUAL);
-	MODULE_CONSTANT(exports, GL_ALWAYS);
-	MODULE_CONSTANT(exports, GL_KEEP);
-	MODULE_CONSTANT(exports, GL_REPLACE);
-	MODULE_CONSTANT(exports, GL_INCR);
-	MODULE_CONSTANT(exports, GL_DECR);
-	MODULE_CONSTANT(exports, GL_INVERT);
-	MODULE_CONSTANT(exports, GL_INCR_WRAP);
-	MODULE_CONSTANT(exports, GL_DECR_WRAP);
-	MODULE_CONSTANT(exports, GL_VENDOR);
-	MODULE_CONSTANT(exports, GL_RENDERER);
-	MODULE_CONSTANT(exports, GL_VERSION);
-	MODULE_CONSTANT(exports, GL_EXTENSIONS);
-	MODULE_CONSTANT(exports, GL_NEAREST);
-	MODULE_CONSTANT(exports, GL_LINEAR);
-	MODULE_CONSTANT(exports, GL_NEAREST_MIPMAP_NEAREST);
-	MODULE_CONSTANT(exports, GL_LINEAR_MIPMAP_NEAREST);
-	MODULE_CONSTANT(exports, GL_NEAREST_MIPMAP_LINEAR);
-	MODULE_CONSTANT(exports, GL_LINEAR_MIPMAP_LINEAR);
-	MODULE_CONSTANT(exports, GL_TEXTURE_MAG_FILTER);
-	MODULE_CONSTANT(exports, GL_TEXTURE_MIN_FILTER);
-	MODULE_CONSTANT(exports, GL_TEXTURE_WRAP_S);
-	MODULE_CONSTANT(exports, GL_TEXTURE_WRAP_T);
-	MODULE_CONSTANT(exports, GL_TEXTURE);
-	MODULE_CONSTANT(exports, GL_TEXTURE_CUBE_MAP);
-	MODULE_CONSTANT(exports, GL_TEXTURE_BINDING_CUBE_MAP);
-	MODULE_CONSTANT(exports, GL_TEXTURE_CUBE_MAP_POSITIVE_X);
-	MODULE_CONSTANT(exports, GL_TEXTURE_CUBE_MAP_NEGATIVE_X);
-	MODULE_CONSTANT(exports, GL_TEXTURE_CUBE_MAP_POSITIVE_Y);
-	MODULE_CONSTANT(exports, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y);
-	MODULE_CONSTANT(exports, GL_TEXTURE_CUBE_MAP_POSITIVE_Z);
-	MODULE_CONSTANT(exports, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z);
-	MODULE_CONSTANT(exports, GL_MAX_CUBE_MAP_TEXTURE_SIZE);
-	MODULE_CONSTANT(exports, GL_TEXTURE0);
-	MODULE_CONSTANT(exports, GL_TEXTURE1);
-	MODULE_CONSTANT(exports, GL_TEXTURE2);
-	MODULE_CONSTANT(exports, GL_TEXTURE3);
-	MODULE_CONSTANT(exports, GL_TEXTURE4);
-	MODULE_CONSTANT(exports, GL_TEXTURE5);
-	MODULE_CONSTANT(exports, GL_TEXTURE6);
-	MODULE_CONSTANT(exports, GL_TEXTURE7);
-	MODULE_CONSTANT(exports, GL_TEXTURE8);
-	MODULE_CONSTANT(exports, GL_TEXTURE9);
-	MODULE_CONSTANT(exports, GL_TEXTURE10);
-	MODULE_CONSTANT(exports, GL_TEXTURE11);
-	MODULE_CONSTANT(exports, GL_TEXTURE12);
-	MODULE_CONSTANT(exports, GL_TEXTURE13);
-	MODULE_CONSTANT(exports, GL_TEXTURE14);
-	MODULE_CONSTANT(exports, GL_TEXTURE15);
-	MODULE_CONSTANT(exports, GL_TEXTURE16);
-	MODULE_CONSTANT(exports, GL_TEXTURE17);
-	MODULE_CONSTANT(exports, GL_TEXTURE18);
-	MODULE_CONSTANT(exports, GL_TEXTURE19);
-	MODULE_CONSTANT(exports, GL_TEXTURE20);
-	MODULE_CONSTANT(exports, GL_TEXTURE21);
-	MODULE_CONSTANT(exports, GL_TEXTURE22);
-	MODULE_CONSTANT(exports, GL_TEXTURE23);
-	MODULE_CONSTANT(exports, GL_TEXTURE24);
-	MODULE_CONSTANT(exports, GL_TEXTURE25);
-	MODULE_CONSTANT(exports, GL_TEXTURE26);
-	MODULE_CONSTANT(exports, GL_TEXTURE27);
-	MODULE_CONSTANT(exports, GL_TEXTURE28);
-	MODULE_CONSTANT(exports, GL_TEXTURE29);
-	MODULE_CONSTANT(exports, GL_TEXTURE30);
-	MODULE_CONSTANT(exports, GL_TEXTURE31);
-	MODULE_CONSTANT(exports, GL_ACTIVE_TEXTURE);
-	MODULE_CONSTANT(exports, GL_REPEAT);
-	MODULE_CONSTANT(exports, GL_CLAMP_TO_EDGE);
-	MODULE_CONSTANT(exports, GL_MIRRORED_REPEAT);
-	MODULE_CONSTANT(exports, GL_FLOAT_VEC2);
-	MODULE_CONSTANT(exports, GL_FLOAT_VEC3);
-	MODULE_CONSTANT(exports, GL_FLOAT_VEC4);
-	MODULE_CONSTANT(exports, GL_INT_VEC2);
-	MODULE_CONSTANT(exports, GL_INT_VEC3);
-	MODULE_CONSTANT(exports, GL_INT_VEC4);
-	MODULE_CONSTANT(exports, GL_BOOL);
-	MODULE_CONSTANT(exports, GL_BOOL_VEC2);
-	MODULE_CONSTANT(exports, GL_BOOL_VEC3);
-	MODULE_CONSTANT(exports, GL_BOOL_VEC4);
-	MODULE_CONSTANT(exports, GL_FLOAT_MAT2);
-	MODULE_CONSTANT(exports, GL_FLOAT_MAT3);
-	MODULE_CONSTANT(exports, GL_FLOAT_MAT4);
-	MODULE_CONSTANT(exports, GL_SAMPLER_2D);
-	MODULE_CONSTANT(exports, GL_SAMPLER_CUBE);
-	MODULE_CONSTANT(exports, GL_VERTEX_ATTRIB_ARRAY_ENABLED);
-	MODULE_CONSTANT(exports, GL_VERTEX_ATTRIB_ARRAY_SIZE);
-	MODULE_CONSTANT(exports, GL_VERTEX_ATTRIB_ARRAY_STRIDE);
-	MODULE_CONSTANT(exports, GL_VERTEX_ATTRIB_ARRAY_TYPE);
-	MODULE_CONSTANT(exports, GL_VERTEX_ATTRIB_ARRAY_NORMALIZED);
-	MODULE_CONSTANT(exports, GL_VERTEX_ATTRIB_ARRAY_POINTER);
-	MODULE_CONSTANT(exports, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING);
-	MODULE_CONSTANT(exports, GL_IMPLEMENTATION_COLOR_READ_TYPE);
-	MODULE_CONSTANT(exports, GL_IMPLEMENTATION_COLOR_READ_FORMAT);
-	MODULE_CONSTANT(exports, GL_COMPILE_STATUS);
-	MODULE_CONSTANT(exports, GL_INFO_LOG_LENGTH);
-	MODULE_CONSTANT(exports, GL_SHADER_SOURCE_LENGTH);
-	MODULE_CONSTANT(exports, GL_SHADER_COMPILER);
-	MODULE_CONSTANT(exports, GL_SHADER_BINARY_FORMATS);
-	MODULE_CONSTANT(exports, GL_NUM_SHADER_BINARY_FORMATS);
-	MODULE_CONSTANT(exports, GL_LOW_FLOAT);
-	MODULE_CONSTANT(exports, GL_MEDIUM_FLOAT);
-	MODULE_CONSTANT(exports, GL_HIGH_FLOAT);
-	MODULE_CONSTANT(exports, GL_LOW_INT);
-	MODULE_CONSTANT(exports, GL_MEDIUM_INT);
-	MODULE_CONSTANT(exports, GL_HIGH_INT);
-	MODULE_CONSTANT(exports, GL_FRAMEBUFFER);
-	MODULE_CONSTANT(exports, GL_RENDERBUFFER);
-	MODULE_CONSTANT(exports, GL_RGBA4);
-	MODULE_CONSTANT(exports, GL_RGB5_A1);
-	MODULE_CONSTANT(exports, GL_RGB565);
-	MODULE_CONSTANT(exports, GL_DEPTH_COMPONENT16);
-	MODULE_CONSTANT(exports, GL_STENCIL_INDEX8);
-	MODULE_CONSTANT(exports, GL_RENDERBUFFER_WIDTH);
-	MODULE_CONSTANT(exports, GL_RENDERBUFFER_HEIGHT);
-	MODULE_CONSTANT(exports, GL_RENDERBUFFER_INTERNAL_FORMAT);
-	MODULE_CONSTANT(exports, GL_RENDERBUFFER_RED_SIZE);
-	MODULE_CONSTANT(exports, GL_RENDERBUFFER_GREEN_SIZE);
-	MODULE_CONSTANT(exports, GL_RENDERBUFFER_BLUE_SIZE);
-	MODULE_CONSTANT(exports, GL_RENDERBUFFER_ALPHA_SIZE);
-	MODULE_CONSTANT(exports, GL_RENDERBUFFER_DEPTH_SIZE);
-	MODULE_CONSTANT(exports, GL_RENDERBUFFER_STENCIL_SIZE);
-	MODULE_CONSTANT(exports, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE);
-	MODULE_CONSTANT(exports, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME);
-	MODULE_CONSTANT(exports, GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL);
-	MODULE_CONSTANT(exports, GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE);
-	MODULE_CONSTANT(exports, GL_COLOR_ATTACHMENT0);
-	MODULE_CONSTANT(exports, GL_DEPTH_ATTACHMENT);
-	MODULE_CONSTANT(exports, GL_STENCIL_ATTACHMENT);
-	MODULE_CONSTANT(exports, GL_NONE);
-	MODULE_CONSTANT(exports, GL_FRAMEBUFFER_COMPLETE);
-	MODULE_CONSTANT(exports, GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT);
-	MODULE_CONSTANT(exports, GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT);
-//	MODULE_CONSTANT(exports, GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS);
-	MODULE_CONSTANT(exports, GL_FRAMEBUFFER_UNSUPPORTED);
-	MODULE_CONSTANT(exports, GL_FRAMEBUFFER_BINDING);
-	MODULE_CONSTANT(exports, GL_RENDERBUFFER_BINDING);
-	MODULE_CONSTANT(exports, GL_MAX_RENDERBUFFER_SIZE);
-	MODULE_CONSTANT(exports, GL_INVALID_FRAMEBUFFER_OPERATION);
+//	NANX_CONSTANT(target, GL_ES_VERSION_2_0);
+	NANX_CONSTANT(target, GL_DEPTH_BUFFER_BIT);
+	NANX_CONSTANT(target, GL_STENCIL_BUFFER_BIT);
+	NANX_CONSTANT(target, GL_COLOR_BUFFER_BIT);
+	NANX_CONSTANT(target, GL_FALSE);
+	NANX_CONSTANT(target, GL_TRUE);
+	NANX_CONSTANT(target, GL_POINTS);
+	NANX_CONSTANT(target, GL_LINES);
+	NANX_CONSTANT(target, GL_LINE_LOOP);
+	NANX_CONSTANT(target, GL_LINE_STRIP);
+	NANX_CONSTANT(target, GL_TRIANGLES);
+	NANX_CONSTANT(target, GL_TRIANGLE_STRIP);
+	NANX_CONSTANT(target, GL_TRIANGLE_FAN);
+	NANX_CONSTANT(target, GL_ZERO);
+	NANX_CONSTANT(target, GL_ONE);
+	NANX_CONSTANT(target, GL_SRC_COLOR);
+	NANX_CONSTANT(target, GL_ONE_MINUS_SRC_COLOR);
+	NANX_CONSTANT(target, GL_SRC_ALPHA);
+	NANX_CONSTANT(target, GL_ONE_MINUS_SRC_ALPHA);
+	NANX_CONSTANT(target, GL_DST_ALPHA);
+	NANX_CONSTANT(target, GL_ONE_MINUS_DST_ALPHA);
+	NANX_CONSTANT(target, GL_DST_COLOR);
+	NANX_CONSTANT(target, GL_ONE_MINUS_DST_COLOR);
+	NANX_CONSTANT(target, GL_SRC_ALPHA_SATURATE);
+	NANX_CONSTANT(target, GL_FUNC_ADD);
+	NANX_CONSTANT(target, GL_BLEND_EQUATION);
+	NANX_CONSTANT(target, GL_BLEND_EQUATION_RGB);
+	NANX_CONSTANT(target, GL_BLEND_EQUATION_ALPHA);
+	NANX_CONSTANT(target, GL_FUNC_SUBTRACT);
+	NANX_CONSTANT(target, GL_FUNC_REVERSE_SUBTRACT);
+	NANX_CONSTANT(target, GL_BLEND_DST_RGB);
+	NANX_CONSTANT(target, GL_BLEND_SRC_RGB);
+	NANX_CONSTANT(target, GL_BLEND_DST_ALPHA);
+	NANX_CONSTANT(target, GL_BLEND_SRC_ALPHA);
+	NANX_CONSTANT(target, GL_CONSTANT_COLOR);
+	NANX_CONSTANT(target, GL_ONE_MINUS_CONSTANT_COLOR);
+	NANX_CONSTANT(target, GL_CONSTANT_ALPHA);
+	NANX_CONSTANT(target, GL_ONE_MINUS_CONSTANT_ALPHA);
+	NANX_CONSTANT(target, GL_BLEND_COLOR);
+	NANX_CONSTANT(target, GL_ARRAY_BUFFER);
+	NANX_CONSTANT(target, GL_ELEMENT_ARRAY_BUFFER);
+	NANX_CONSTANT(target, GL_ARRAY_BUFFER_BINDING);
+	NANX_CONSTANT(target, GL_ELEMENT_ARRAY_BUFFER_BINDING);
+	NANX_CONSTANT(target, GL_STREAM_DRAW);
+	NANX_CONSTANT(target, GL_STATIC_DRAW);
+	NANX_CONSTANT(target, GL_DYNAMIC_DRAW);
+	NANX_CONSTANT(target, GL_BUFFER_SIZE);
+	NANX_CONSTANT(target, GL_BUFFER_USAGE);
+	NANX_CONSTANT(target, GL_CURRENT_VERTEX_ATTRIB);
+	NANX_CONSTANT(target, GL_FRONT);
+	NANX_CONSTANT(target, GL_BACK);
+	NANX_CONSTANT(target, GL_FRONT_AND_BACK);
+	NANX_CONSTANT(target, GL_TEXTURE_2D);
+	NANX_CONSTANT(target, GL_CULL_FACE);
+	NANX_CONSTANT(target, GL_BLEND);
+	NANX_CONSTANT(target, GL_DITHER);
+	NANX_CONSTANT(target, GL_STENCIL_TEST);
+	NANX_CONSTANT(target, GL_DEPTH_TEST);
+	NANX_CONSTANT(target, GL_SCISSOR_TEST);
+	NANX_CONSTANT(target, GL_POLYGON_OFFSET_FILL);
+	NANX_CONSTANT(target, GL_SAMPLE_ALPHA_TO_COVERAGE);
+	NANX_CONSTANT(target, GL_SAMPLE_COVERAGE);
+	NANX_CONSTANT(target, GL_NO_ERROR);
+	NANX_CONSTANT(target, GL_INVALID_ENUM);
+	NANX_CONSTANT(target, GL_INVALID_VALUE);
+	NANX_CONSTANT(target, GL_INVALID_OPERATION);
+	NANX_CONSTANT(target, GL_OUT_OF_MEMORY);
+	NANX_CONSTANT(target, GL_CW);
+	NANX_CONSTANT(target, GL_CCW);
+	NANX_CONSTANT(target, GL_LINE_WIDTH);
+	NANX_CONSTANT(target, GL_ALIASED_POINT_SIZE_RANGE);
+	NANX_CONSTANT(target, GL_ALIASED_LINE_WIDTH_RANGE);
+	NANX_CONSTANT(target, GL_CULL_FACE_MODE);
+	NANX_CONSTANT(target, GL_FRONT_FACE);
+	NANX_CONSTANT(target, GL_DEPTH_RANGE);
+	NANX_CONSTANT(target, GL_DEPTH_WRITEMASK);
+	NANX_CONSTANT(target, GL_DEPTH_CLEAR_VALUE);
+	NANX_CONSTANT(target, GL_DEPTH_FUNC);
+	NANX_CONSTANT(target, GL_STENCIL_CLEAR_VALUE);
+	NANX_CONSTANT(target, GL_STENCIL_FUNC);
+	NANX_CONSTANT(target, GL_STENCIL_FAIL);
+	NANX_CONSTANT(target, GL_STENCIL_PASS_DEPTH_FAIL);
+	NANX_CONSTANT(target, GL_STENCIL_PASS_DEPTH_PASS);
+	NANX_CONSTANT(target, GL_STENCIL_REF);
+	NANX_CONSTANT(target, GL_STENCIL_VALUE_MASK);
+	NANX_CONSTANT(target, GL_STENCIL_WRITEMASK);
+	NANX_CONSTANT(target, GL_STENCIL_BACK_FUNC);
+	NANX_CONSTANT(target, GL_STENCIL_BACK_FAIL);
+	NANX_CONSTANT(target, GL_STENCIL_BACK_PASS_DEPTH_FAIL);
+	NANX_CONSTANT(target, GL_STENCIL_BACK_PASS_DEPTH_PASS);
+	NANX_CONSTANT(target, GL_STENCIL_BACK_REF);
+	NANX_CONSTANT(target, GL_STENCIL_BACK_VALUE_MASK);
+	NANX_CONSTANT(target, GL_STENCIL_BACK_WRITEMASK);
+	NANX_CONSTANT(target, GL_VIEWPORT);
+	NANX_CONSTANT(target, GL_SCISSOR_BOX);
+	NANX_CONSTANT(target, GL_COLOR_CLEAR_VALUE);
+	NANX_CONSTANT(target, GL_COLOR_WRITEMASK);
+	NANX_CONSTANT(target, GL_UNPACK_ALIGNMENT);
+	NANX_CONSTANT(target, GL_PACK_ALIGNMENT);
+	NANX_CONSTANT(target, GL_MAX_TEXTURE_SIZE);
+	NANX_CONSTANT(target, GL_MAX_VIEWPORT_DIMS);
+	NANX_CONSTANT(target, GL_SUBPIXEL_BITS);
+	NANX_CONSTANT(target, GL_RED_BITS);
+	NANX_CONSTANT(target, GL_GREEN_BITS);
+	NANX_CONSTANT(target, GL_BLUE_BITS);
+	NANX_CONSTANT(target, GL_ALPHA_BITS);
+	NANX_CONSTANT(target, GL_DEPTH_BITS);
+	NANX_CONSTANT(target, GL_STENCIL_BITS);
+	NANX_CONSTANT(target, GL_POLYGON_OFFSET_UNITS);
+	NANX_CONSTANT(target, GL_POLYGON_OFFSET_FACTOR);
+	NANX_CONSTANT(target, GL_TEXTURE_BINDING_2D);
+	NANX_CONSTANT(target, GL_SAMPLE_BUFFERS);
+	NANX_CONSTANT(target, GL_SAMPLES);
+	NANX_CONSTANT(target, GL_SAMPLE_COVERAGE_VALUE);
+	NANX_CONSTANT(target, GL_SAMPLE_COVERAGE_INVERT);
+	NANX_CONSTANT(target, GL_NUM_COMPRESSED_TEXTURE_FORMATS);
+	NANX_CONSTANT(target, GL_COMPRESSED_TEXTURE_FORMATS);
+	NANX_CONSTANT(target, GL_DONT_CARE);
+	NANX_CONSTANT(target, GL_FASTEST);
+	NANX_CONSTANT(target, GL_NICEST);
+	NANX_CONSTANT(target, GL_GENERATE_MIPMAP_HINT);
+	NANX_CONSTANT(target, GL_BYTE);
+	NANX_CONSTANT(target, GL_UNSIGNED_BYTE);
+	NANX_CONSTANT(target, GL_SHORT);
+	NANX_CONSTANT(target, GL_UNSIGNED_SHORT);
+	NANX_CONSTANT(target, GL_INT);
+	NANX_CONSTANT(target, GL_UNSIGNED_INT);
+	NANX_CONSTANT(target, GL_FLOAT);
+	NANX_CONSTANT(target, GL_FIXED);
+	NANX_CONSTANT(target, GL_DEPTH_COMPONENT);
+	NANX_CONSTANT(target, GL_ALPHA);
+	NANX_CONSTANT(target, GL_RGB);
+	NANX_CONSTANT(target, GL_RGBA);
+	NANX_CONSTANT(target, GL_LUMINANCE);
+	NANX_CONSTANT(target, GL_LUMINANCE_ALPHA);
+	NANX_CONSTANT(target, GL_UNSIGNED_SHORT_4_4_4_4);
+	NANX_CONSTANT(target, GL_UNSIGNED_SHORT_5_5_5_1);
+	NANX_CONSTANT(target, GL_UNSIGNED_SHORT_5_6_5);
+	NANX_CONSTANT(target, GL_FRAGMENT_SHADER);
+	NANX_CONSTANT(target, GL_VERTEX_SHADER);
+	NANX_CONSTANT(target, GL_MAX_VERTEX_ATTRIBS);
+	NANX_CONSTANT(target, GL_MAX_VERTEX_UNIFORM_VECTORS);
+	NANX_CONSTANT(target, GL_MAX_VARYING_VECTORS);
+	NANX_CONSTANT(target, GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS);
+	NANX_CONSTANT(target, GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS);
+	NANX_CONSTANT(target, GL_MAX_TEXTURE_IMAGE_UNITS);
+	NANX_CONSTANT(target, GL_MAX_FRAGMENT_UNIFORM_VECTORS);
+	NANX_CONSTANT(target, GL_SHADER_TYPE);
+	NANX_CONSTANT(target, GL_DELETE_STATUS);
+	NANX_CONSTANT(target, GL_LINK_STATUS);
+	NANX_CONSTANT(target, GL_VALIDATE_STATUS);
+	NANX_CONSTANT(target, GL_ATTACHED_SHADERS);
+	NANX_CONSTANT(target, GL_ACTIVE_UNIFORMS);
+	NANX_CONSTANT(target, GL_ACTIVE_UNIFORM_MAX_LENGTH);
+	NANX_CONSTANT(target, GL_ACTIVE_ATTRIBUTES);
+	NANX_CONSTANT(target, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH);
+	NANX_CONSTANT(target, GL_SHADING_LANGUAGE_VERSION);
+	NANX_CONSTANT(target, GL_CURRENT_PROGRAM);
+	NANX_CONSTANT(target, GL_NEVER);
+	NANX_CONSTANT(target, GL_LESS);
+	NANX_CONSTANT(target, GL_EQUAL);
+	NANX_CONSTANT(target, GL_LEQUAL);
+	NANX_CONSTANT(target, GL_GREATER);
+	NANX_CONSTANT(target, GL_NOTEQUAL);
+	NANX_CONSTANT(target, GL_GEQUAL);
+	NANX_CONSTANT(target, GL_ALWAYS);
+	NANX_CONSTANT(target, GL_KEEP);
+	NANX_CONSTANT(target, GL_REPLACE);
+	NANX_CONSTANT(target, GL_INCR);
+	NANX_CONSTANT(target, GL_DECR);
+	NANX_CONSTANT(target, GL_INVERT);
+	NANX_CONSTANT(target, GL_INCR_WRAP);
+	NANX_CONSTANT(target, GL_DECR_WRAP);
+	NANX_CONSTANT(target, GL_VENDOR);
+	NANX_CONSTANT(target, GL_RENDERER);
+	NANX_CONSTANT(target, GL_VERSION);
+	NANX_CONSTANT(target, GL_EXTENSIONS);
+	NANX_CONSTANT(target, GL_NEAREST);
+	NANX_CONSTANT(target, GL_LINEAR);
+	NANX_CONSTANT(target, GL_NEAREST_MIPMAP_NEAREST);
+	NANX_CONSTANT(target, GL_LINEAR_MIPMAP_NEAREST);
+	NANX_CONSTANT(target, GL_NEAREST_MIPMAP_LINEAR);
+	NANX_CONSTANT(target, GL_LINEAR_MIPMAP_LINEAR);
+	NANX_CONSTANT(target, GL_TEXTURE_MAG_FILTER);
+	NANX_CONSTANT(target, GL_TEXTURE_MIN_FILTER);
+	NANX_CONSTANT(target, GL_TEXTURE_WRAP_S);
+	NANX_CONSTANT(target, GL_TEXTURE_WRAP_T);
+	NANX_CONSTANT(target, GL_TEXTURE);
+	NANX_CONSTANT(target, GL_TEXTURE_CUBE_MAP);
+	NANX_CONSTANT(target, GL_TEXTURE_BINDING_CUBE_MAP);
+	NANX_CONSTANT(target, GL_TEXTURE_CUBE_MAP_POSITIVE_X);
+	NANX_CONSTANT(target, GL_TEXTURE_CUBE_MAP_NEGATIVE_X);
+	NANX_CONSTANT(target, GL_TEXTURE_CUBE_MAP_POSITIVE_Y);
+	NANX_CONSTANT(target, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y);
+	NANX_CONSTANT(target, GL_TEXTURE_CUBE_MAP_POSITIVE_Z);
+	NANX_CONSTANT(target, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z);
+	NANX_CONSTANT(target, GL_MAX_CUBE_MAP_TEXTURE_SIZE);
+	NANX_CONSTANT(target, GL_TEXTURE0);
+	NANX_CONSTANT(target, GL_TEXTURE1);
+	NANX_CONSTANT(target, GL_TEXTURE2);
+	NANX_CONSTANT(target, GL_TEXTURE3);
+	NANX_CONSTANT(target, GL_TEXTURE4);
+	NANX_CONSTANT(target, GL_TEXTURE5);
+	NANX_CONSTANT(target, GL_TEXTURE6);
+	NANX_CONSTANT(target, GL_TEXTURE7);
+	NANX_CONSTANT(target, GL_TEXTURE8);
+	NANX_CONSTANT(target, GL_TEXTURE9);
+	NANX_CONSTANT(target, GL_TEXTURE10);
+	NANX_CONSTANT(target, GL_TEXTURE11);
+	NANX_CONSTANT(target, GL_TEXTURE12);
+	NANX_CONSTANT(target, GL_TEXTURE13);
+	NANX_CONSTANT(target, GL_TEXTURE14);
+	NANX_CONSTANT(target, GL_TEXTURE15);
+	NANX_CONSTANT(target, GL_TEXTURE16);
+	NANX_CONSTANT(target, GL_TEXTURE17);
+	NANX_CONSTANT(target, GL_TEXTURE18);
+	NANX_CONSTANT(target, GL_TEXTURE19);
+	NANX_CONSTANT(target, GL_TEXTURE20);
+	NANX_CONSTANT(target, GL_TEXTURE21);
+	NANX_CONSTANT(target, GL_TEXTURE22);
+	NANX_CONSTANT(target, GL_TEXTURE23);
+	NANX_CONSTANT(target, GL_TEXTURE24);
+	NANX_CONSTANT(target, GL_TEXTURE25);
+	NANX_CONSTANT(target, GL_TEXTURE26);
+	NANX_CONSTANT(target, GL_TEXTURE27);
+	NANX_CONSTANT(target, GL_TEXTURE28);
+	NANX_CONSTANT(target, GL_TEXTURE29);
+	NANX_CONSTANT(target, GL_TEXTURE30);
+	NANX_CONSTANT(target, GL_TEXTURE31);
+	NANX_CONSTANT(target, GL_ACTIVE_TEXTURE);
+	NANX_CONSTANT(target, GL_REPEAT);
+	NANX_CONSTANT(target, GL_CLAMP_TO_EDGE);
+	NANX_CONSTANT(target, GL_MIRRORED_REPEAT);
+	NANX_CONSTANT(target, GL_FLOAT_VEC2);
+	NANX_CONSTANT(target, GL_FLOAT_VEC3);
+	NANX_CONSTANT(target, GL_FLOAT_VEC4);
+	NANX_CONSTANT(target, GL_INT_VEC2);
+	NANX_CONSTANT(target, GL_INT_VEC3);
+	NANX_CONSTANT(target, GL_INT_VEC4);
+	NANX_CONSTANT(target, GL_BOOL);
+	NANX_CONSTANT(target, GL_BOOL_VEC2);
+	NANX_CONSTANT(target, GL_BOOL_VEC3);
+	NANX_CONSTANT(target, GL_BOOL_VEC4);
+	NANX_CONSTANT(target, GL_FLOAT_MAT2);
+	NANX_CONSTANT(target, GL_FLOAT_MAT3);
+	NANX_CONSTANT(target, GL_FLOAT_MAT4);
+	NANX_CONSTANT(target, GL_SAMPLER_2D);
+	NANX_CONSTANT(target, GL_SAMPLER_CUBE);
+	NANX_CONSTANT(target, GL_VERTEX_ATTRIB_ARRAY_ENABLED);
+	NANX_CONSTANT(target, GL_VERTEX_ATTRIB_ARRAY_SIZE);
+	NANX_CONSTANT(target, GL_VERTEX_ATTRIB_ARRAY_STRIDE);
+	NANX_CONSTANT(target, GL_VERTEX_ATTRIB_ARRAY_TYPE);
+	NANX_CONSTANT(target, GL_VERTEX_ATTRIB_ARRAY_NORMALIZED);
+	NANX_CONSTANT(target, GL_VERTEX_ATTRIB_ARRAY_POINTER);
+	NANX_CONSTANT(target, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING);
+	NANX_CONSTANT(target, GL_IMPLEMENTATION_COLOR_READ_TYPE);
+	NANX_CONSTANT(target, GL_IMPLEMENTATION_COLOR_READ_FORMAT);
+	NANX_CONSTANT(target, GL_COMPILE_STATUS);
+	NANX_CONSTANT(target, GL_INFO_LOG_LENGTH);
+	NANX_CONSTANT(target, GL_SHADER_SOURCE_LENGTH);
+	NANX_CONSTANT(target, GL_SHADER_COMPILER);
+	NANX_CONSTANT(target, GL_SHADER_BINARY_FORMATS);
+	NANX_CONSTANT(target, GL_NUM_SHADER_BINARY_FORMATS);
+	NANX_CONSTANT(target, GL_LOW_FLOAT);
+	NANX_CONSTANT(target, GL_MEDIUM_FLOAT);
+	NANX_CONSTANT(target, GL_HIGH_FLOAT);
+	NANX_CONSTANT(target, GL_LOW_INT);
+	NANX_CONSTANT(target, GL_MEDIUM_INT);
+	NANX_CONSTANT(target, GL_HIGH_INT);
+	NANX_CONSTANT(target, GL_FRAMEBUFFER);
+	NANX_CONSTANT(target, GL_RENDERBUFFER);
+	NANX_CONSTANT(target, GL_RGBA4);
+	NANX_CONSTANT(target, GL_RGB5_A1);
+	NANX_CONSTANT(target, GL_RGB565);
+	NANX_CONSTANT(target, GL_DEPTH_COMPONENT16);
+	NANX_CONSTANT(target, GL_STENCIL_INDEX8);
+	NANX_CONSTANT(target, GL_RENDERBUFFER_WIDTH);
+	NANX_CONSTANT(target, GL_RENDERBUFFER_HEIGHT);
+	NANX_CONSTANT(target, GL_RENDERBUFFER_INTERNAL_FORMAT);
+	NANX_CONSTANT(target, GL_RENDERBUFFER_RED_SIZE);
+	NANX_CONSTANT(target, GL_RENDERBUFFER_GREEN_SIZE);
+	NANX_CONSTANT(target, GL_RENDERBUFFER_BLUE_SIZE);
+	NANX_CONSTANT(target, GL_RENDERBUFFER_ALPHA_SIZE);
+	NANX_CONSTANT(target, GL_RENDERBUFFER_DEPTH_SIZE);
+	NANX_CONSTANT(target, GL_RENDERBUFFER_STENCIL_SIZE);
+	NANX_CONSTANT(target, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE);
+	NANX_CONSTANT(target, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME);
+	NANX_CONSTANT(target, GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL);
+	NANX_CONSTANT(target, GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE);
+	NANX_CONSTANT(target, GL_COLOR_ATTACHMENT0);
+	NANX_CONSTANT(target, GL_DEPTH_ATTACHMENT);
+	NANX_CONSTANT(target, GL_STENCIL_ATTACHMENT);
+	NANX_CONSTANT(target, GL_NONE);
+	NANX_CONSTANT(target, GL_FRAMEBUFFER_COMPLETE);
+	NANX_CONSTANT(target, GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT);
+	NANX_CONSTANT(target, GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT);
+//	NANX_CONSTANT(target, GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS);
+	NANX_CONSTANT(target, GL_FRAMEBUFFER_UNSUPPORTED);
+	NANX_CONSTANT(target, GL_FRAMEBUFFER_BINDING);
+	NANX_CONSTANT(target, GL_RENDERBUFFER_BINDING);
+	NANX_CONSTANT(target, GL_MAX_RENDERBUFFER_SIZE);
+	NANX_CONSTANT(target, GL_INVALID_FRAMEBUFFER_OPERATION);
 
 	#ifndef GL_POINT_SPRITE
 	#define GL_POINT_SPRITE 0x8861
 	#endif
-	MODULE_CONSTANT(exports, GL_POINT_SPRITE);
+	NANX_CONSTANT(target, GL_POINT_SPRITE);
 	
 	#ifndef GL_VERTEX_PROGRAM_POINT_SIZE
 	#define GL_VERTEX_PROGRAM_POINT_SIZE 0x8642
 	#endif
-	MODULE_CONSTANT(exports, GL_VERTEX_PROGRAM_POINT_SIZE);
+	NANX_CONSTANT(target, GL_VERTEX_PROGRAM_POINT_SIZE);
 
-	MODULE_EXPORT_APPLY(exports, glActiveTexture);
-	MODULE_EXPORT_APPLY(exports, glAttachShader);
-	MODULE_EXPORT_APPLY(exports, glBindAttribLocation);
-	MODULE_EXPORT_APPLY(exports, glBindBuffer);
-	MODULE_EXPORT_APPLY(exports, glBindFramebuffer);
-	MODULE_EXPORT_APPLY(exports, glBindRenderbuffer);
-	MODULE_EXPORT_APPLY(exports, glBindTexture);
-	MODULE_EXPORT_APPLY(exports, glBlendColor);
-	MODULE_EXPORT_APPLY(exports, glBlendEquation);
-	MODULE_EXPORT_APPLY(exports, glBlendEquationSeparate);
-	MODULE_EXPORT_APPLY(exports, glBlendFunc);
-	MODULE_EXPORT_APPLY(exports, glBlendFuncSeparate);
-	MODULE_EXPORT_APPLY(exports, glBufferData);
-	MODULE_EXPORT_APPLY(exports, glBufferSubData);
-	MODULE_EXPORT_APPLY(exports, glCheckFramebufferStatus);
-	MODULE_EXPORT_APPLY(exports, glClear);
-	MODULE_EXPORT_APPLY(exports, glClearColor);
-	MODULE_EXPORT_APPLY(exports, glClearDepthf);
-	MODULE_EXPORT_APPLY(exports, glClearStencil);
-	MODULE_EXPORT_APPLY(exports, glColorMask);
-	MODULE_EXPORT_APPLY(exports, glCompileShader);
-	MODULE_EXPORT_APPLY(exports, glCompressedTexImage2D);
-	MODULE_EXPORT_APPLY(exports, glCompressedTexSubImage2D);
-	MODULE_EXPORT_APPLY(exports, glCopyTexImage2D);
-	MODULE_EXPORT_APPLY(exports, glCopyTexSubImage2D);
-	MODULE_EXPORT_APPLY(exports, glCreateProgram);
-	MODULE_EXPORT_APPLY(exports, glCreateShader);
-	MODULE_EXPORT_APPLY(exports, glCullFace);
-	MODULE_EXPORT_APPLY(exports, glDeleteBuffers);
-	MODULE_EXPORT_APPLY(exports, glDeleteFramebuffers);
-	MODULE_EXPORT_APPLY(exports, glDeleteProgram);
-	MODULE_EXPORT_APPLY(exports, glDeleteRenderbuffers);
-	MODULE_EXPORT_APPLY(exports, glDeleteShader);
-	MODULE_EXPORT_APPLY(exports, glDeleteTextures);
-	MODULE_EXPORT_APPLY(exports, glDepthFunc);
-	MODULE_EXPORT_APPLY(exports, glDepthMask);
-	MODULE_EXPORT_APPLY(exports, glDepthRangef);
-	MODULE_EXPORT_APPLY(exports, glDetachShader);
-	MODULE_EXPORT_APPLY(exports, glDisable);
-	MODULE_EXPORT_APPLY(exports, glDisableVertexAttribArray);
-	MODULE_EXPORT_APPLY(exports, glDrawArrays);
-	MODULE_EXPORT_APPLY(exports, glDrawElements);
-	MODULE_EXPORT_APPLY(exports, glEnable);
-	MODULE_EXPORT_APPLY(exports, glEnableVertexAttribArray);
-	MODULE_EXPORT_APPLY(exports, glFinish);
-	MODULE_EXPORT_APPLY(exports, glFlush);
-	MODULE_EXPORT_APPLY(exports, glFramebufferRenderbuffer);
-	MODULE_EXPORT_APPLY(exports, glFramebufferTexture2D);
-	MODULE_EXPORT_APPLY(exports, glFrontFace);
-	MODULE_EXPORT_APPLY(exports, glGenBuffers);
-	MODULE_EXPORT_APPLY(exports, glGenerateMipmap);
-	MODULE_EXPORT_APPLY(exports, glGenFramebuffers);
-	MODULE_EXPORT_APPLY(exports, glGenRenderbuffers);
-	MODULE_EXPORT_APPLY(exports, glGenTextures);
-	MODULE_EXPORT_APPLY(exports, glGetActiveAttrib);
-	MODULE_EXPORT_APPLY(exports, glGetActiveUniform);
-	MODULE_EXPORT_APPLY(exports, glGetAttachedShaders);
-	MODULE_EXPORT_APPLY(exports, glGetAttribLocation);
-	MODULE_EXPORT_APPLY(exports, glGetBooleanv);
-	MODULE_EXPORT_APPLY(exports, glGetBufferParameteriv);
-	MODULE_EXPORT_APPLY(exports, glGetError);
-	MODULE_EXPORT_APPLY(exports, glGetFloatv);
-	MODULE_EXPORT_APPLY(exports, glGetFramebufferAttachmentParameteriv);
-	MODULE_EXPORT_APPLY(exports, glGetIntegerv);
-	MODULE_EXPORT_APPLY(exports, glGetProgramiv);
-	MODULE_EXPORT_APPLY(exports, glGetProgramInfoLog);
-	MODULE_EXPORT_APPLY(exports, glGetRenderbufferParameteriv);
-	MODULE_EXPORT_APPLY(exports, glGetShaderiv);
-	MODULE_EXPORT_APPLY(exports, glGetShaderInfoLog);
-	MODULE_EXPORT_APPLY(exports, glGetShaderPrecisionFormat);
-	MODULE_EXPORT_APPLY(exports, glGetShaderSource);
-	MODULE_EXPORT_APPLY(exports, glGetString);
-	MODULE_EXPORT_APPLY(exports, glGetTexParameterfv);
-	MODULE_EXPORT_APPLY(exports, glGetTexParameteriv);
-	MODULE_EXPORT_APPLY(exports, glGetUniformfv);
-	MODULE_EXPORT_APPLY(exports, glGetUniformiv);
-	MODULE_EXPORT_APPLY(exports, glGetUniformLocation);
-	MODULE_EXPORT_APPLY(exports, glGetVertexAttribfv);
-	MODULE_EXPORT_APPLY(exports, glGetVertexAttribiv);
-	MODULE_EXPORT_APPLY(exports, glGetVertexAttribPointerv);
-	MODULE_EXPORT_APPLY(exports, glHint);
-	MODULE_EXPORT_APPLY(exports, glIsBuffer);
-	MODULE_EXPORT_APPLY(exports, glIsEnabled);
-	MODULE_EXPORT_APPLY(exports, glIsFramebuffer);
-	MODULE_EXPORT_APPLY(exports, glIsProgram);
-	MODULE_EXPORT_APPLY(exports, glIsRenderbuffer);
-	MODULE_EXPORT_APPLY(exports, glIsShader);
-	MODULE_EXPORT_APPLY(exports, glIsTexture);
-	MODULE_EXPORT_APPLY(exports, glLineWidth);
-	MODULE_EXPORT_APPLY(exports, glLinkProgram);
-	MODULE_EXPORT_APPLY(exports, glPixelStorei);
-	MODULE_EXPORT_APPLY(exports, glPolygonOffset);
-	MODULE_EXPORT_APPLY(exports, glReadPixels);
-	MODULE_EXPORT_APPLY(exports, glReleaseShaderCompiler);
-	MODULE_EXPORT_APPLY(exports, glRenderbufferStorage);
-	MODULE_EXPORT_APPLY(exports, glSampleCoverage);
-	MODULE_EXPORT_APPLY(exports, glScissor);
-	MODULE_EXPORT_APPLY(exports, glShaderBinary);
-	MODULE_EXPORT_APPLY(exports, glShaderSource);
-	MODULE_EXPORT_APPLY(exports, glStencilFunc);
-	MODULE_EXPORT_APPLY(exports, glStencilFuncSeparate);
-	MODULE_EXPORT_APPLY(exports, glStencilMask);
-	MODULE_EXPORT_APPLY(exports, glStencilMaskSeparate);
-	MODULE_EXPORT_APPLY(exports, glStencilOp);
-	MODULE_EXPORT_APPLY(exports, glStencilOpSeparate);
-	MODULE_EXPORT_APPLY(exports, glTexImage2D);
-	MODULE_EXPORT_APPLY(exports, glTexParameterf);
-	MODULE_EXPORT_APPLY(exports, glTexParameterfv);
-	MODULE_EXPORT_APPLY(exports, glTexParameteri);
-	MODULE_EXPORT_APPLY(exports, glTexParameteriv);
-	MODULE_EXPORT_APPLY(exports, glTexSubImage2D);
-	MODULE_EXPORT_APPLY(exports, glUniform1f);
-	MODULE_EXPORT_APPLY(exports, glUniform1fv);
-	MODULE_EXPORT_APPLY(exports, glUniform1i);
-	MODULE_EXPORT_APPLY(exports, glUniform1iv);
-	MODULE_EXPORT_APPLY(exports, glUniform2f);
-	MODULE_EXPORT_APPLY(exports, glUniform2fv);
-	MODULE_EXPORT_APPLY(exports, glUniform2i);
-	MODULE_EXPORT_APPLY(exports, glUniform2iv);
-	MODULE_EXPORT_APPLY(exports, glUniform3f);
-	MODULE_EXPORT_APPLY(exports, glUniform3fv);
-	MODULE_EXPORT_APPLY(exports, glUniform3i);
-	MODULE_EXPORT_APPLY(exports, glUniform3iv);
-	MODULE_EXPORT_APPLY(exports, glUniform4f);
-	MODULE_EXPORT_APPLY(exports, glUniform4fv);
-	MODULE_EXPORT_APPLY(exports, glUniform4i);
-	MODULE_EXPORT_APPLY(exports, glUniform4iv);
-	MODULE_EXPORT_APPLY(exports, glUniformMatrix2fv);
-	MODULE_EXPORT_APPLY(exports, glUniformMatrix3fv);
-	MODULE_EXPORT_APPLY(exports, glUniformMatrix4fv);
-	MODULE_EXPORT_APPLY(exports, glUseProgram);
-	MODULE_EXPORT_APPLY(exports, glValidateProgram);
-	MODULE_EXPORT_APPLY(exports, glVertexAttrib1f);
-	MODULE_EXPORT_APPLY(exports, glVertexAttrib1fv);
-	MODULE_EXPORT_APPLY(exports, glVertexAttrib2f);
-	MODULE_EXPORT_APPLY(exports, glVertexAttrib2fv);
-	MODULE_EXPORT_APPLY(exports, glVertexAttrib3f);
-	MODULE_EXPORT_APPLY(exports, glVertexAttrib3fv);
-	MODULE_EXPORT_APPLY(exports, glVertexAttrib4f);
-	MODULE_EXPORT_APPLY(exports, glVertexAttrib4fv);
-	MODULE_EXPORT_APPLY(exports, glVertexAttribPointer);
-	MODULE_EXPORT_APPLY(exports, glViewport);
+	NANX_EXPORT_APPLY(target, glActiveTexture);
+	NANX_EXPORT_APPLY(target, glAttachShader);
+	NANX_EXPORT_APPLY(target, glBindAttribLocation);
+	NANX_EXPORT_APPLY(target, glBindBuffer);
+	NANX_EXPORT_APPLY(target, glBindFramebuffer);
+	NANX_EXPORT_APPLY(target, glBindRenderbuffer);
+	NANX_EXPORT_APPLY(target, glBindTexture);
+	NANX_EXPORT_APPLY(target, glBlendColor);
+	NANX_EXPORT_APPLY(target, glBlendEquation);
+	NANX_EXPORT_APPLY(target, glBlendEquationSeparate);
+	NANX_EXPORT_APPLY(target, glBlendFunc);
+	NANX_EXPORT_APPLY(target, glBlendFuncSeparate);
+	NANX_EXPORT_APPLY(target, glBufferData);
+	NANX_EXPORT_APPLY(target, glBufferSubData);
+	NANX_EXPORT_APPLY(target, glCheckFramebufferStatus);
+	NANX_EXPORT_APPLY(target, glClear);
+	NANX_EXPORT_APPLY(target, glClearColor);
+	NANX_EXPORT_APPLY(target, glClearDepthf);
+	NANX_EXPORT_APPLY(target, glClearStencil);
+	NANX_EXPORT_APPLY(target, glColorMask);
+	NANX_EXPORT_APPLY(target, glCompileShader);
+	NANX_EXPORT_APPLY(target, glCompressedTexImage2D);
+	NANX_EXPORT_APPLY(target, glCompressedTexSubImage2D);
+	NANX_EXPORT_APPLY(target, glCopyTexImage2D);
+	NANX_EXPORT_APPLY(target, glCopyTexSubImage2D);
+	NANX_EXPORT_APPLY(target, glCreateProgram);
+	NANX_EXPORT_APPLY(target, glCreateShader);
+	NANX_EXPORT_APPLY(target, glCullFace);
+	NANX_EXPORT_APPLY(target, glDeleteBuffers);
+	NANX_EXPORT_APPLY(target, glDeleteFramebuffers);
+	NANX_EXPORT_APPLY(target, glDeleteProgram);
+	NANX_EXPORT_APPLY(target, glDeleteRenderbuffers);
+	NANX_EXPORT_APPLY(target, glDeleteShader);
+	NANX_EXPORT_APPLY(target, glDeleteTextures);
+	NANX_EXPORT_APPLY(target, glDepthFunc);
+	NANX_EXPORT_APPLY(target, glDepthMask);
+	NANX_EXPORT_APPLY(target, glDepthRangef);
+	NANX_EXPORT_APPLY(target, glDetachShader);
+	NANX_EXPORT_APPLY(target, glDisable);
+	NANX_EXPORT_APPLY(target, glDisableVertexAttribArray);
+	NANX_EXPORT_APPLY(target, glDrawArrays);
+	NANX_EXPORT_APPLY(target, glDrawElements);
+	NANX_EXPORT_APPLY(target, glEnable);
+	NANX_EXPORT_APPLY(target, glEnableVertexAttribArray);
+	NANX_EXPORT_APPLY(target, glFinish);
+	NANX_EXPORT_APPLY(target, glFlush);
+	NANX_EXPORT_APPLY(target, glFramebufferRenderbuffer);
+	NANX_EXPORT_APPLY(target, glFramebufferTexture2D);
+	NANX_EXPORT_APPLY(target, glFrontFace);
+	NANX_EXPORT_APPLY(target, glGenBuffers);
+	NANX_EXPORT_APPLY(target, glGenerateMipmap);
+	NANX_EXPORT_APPLY(target, glGenFramebuffers);
+	NANX_EXPORT_APPLY(target, glGenRenderbuffers);
+	NANX_EXPORT_APPLY(target, glGenTextures);
+	NANX_EXPORT_APPLY(target, glGetActiveAttrib);
+	NANX_EXPORT_APPLY(target, glGetActiveUniform);
+	NANX_EXPORT_APPLY(target, glGetAttachedShaders);
+	NANX_EXPORT_APPLY(target, glGetAttribLocation);
+	NANX_EXPORT_APPLY(target, glGetBooleanv);
+	NANX_EXPORT_APPLY(target, glGetBufferParameteriv);
+	NANX_EXPORT_APPLY(target, glGetError);
+	NANX_EXPORT_APPLY(target, glGetFloatv);
+	NANX_EXPORT_APPLY(target, glGetFramebufferAttachmentParameteriv);
+	NANX_EXPORT_APPLY(target, glGetIntegerv);
+	NANX_EXPORT_APPLY(target, glGetProgramiv);
+	NANX_EXPORT_APPLY(target, glGetProgramInfoLog);
+	NANX_EXPORT_APPLY(target, glGetRenderbufferParameteriv);
+	NANX_EXPORT_APPLY(target, glGetShaderiv);
+	NANX_EXPORT_APPLY(target, glGetShaderInfoLog);
+	NANX_EXPORT_APPLY(target, glGetShaderPrecisionFormat);
+	NANX_EXPORT_APPLY(target, glGetShaderSource);
+	NANX_EXPORT_APPLY(target, glGetString);
+	NANX_EXPORT_APPLY(target, glGetTexParameterfv);
+	NANX_EXPORT_APPLY(target, glGetTexParameteriv);
+	NANX_EXPORT_APPLY(target, glGetUniformfv);
+	NANX_EXPORT_APPLY(target, glGetUniformiv);
+	NANX_EXPORT_APPLY(target, glGetUniformLocation);
+	NANX_EXPORT_APPLY(target, glGetVertexAttribfv);
+	NANX_EXPORT_APPLY(target, glGetVertexAttribiv);
+	NANX_EXPORT_APPLY(target, glGetVertexAttribPointerv);
+	NANX_EXPORT_APPLY(target, glHint);
+	NANX_EXPORT_APPLY(target, glIsBuffer);
+	NANX_EXPORT_APPLY(target, glIsEnabled);
+	NANX_EXPORT_APPLY(target, glIsFramebuffer);
+	NANX_EXPORT_APPLY(target, glIsProgram);
+	NANX_EXPORT_APPLY(target, glIsRenderbuffer);
+	NANX_EXPORT_APPLY(target, glIsShader);
+	NANX_EXPORT_APPLY(target, glIsTexture);
+	NANX_EXPORT_APPLY(target, glLineWidth);
+	NANX_EXPORT_APPLY(target, glLinkProgram);
+	NANX_EXPORT_APPLY(target, glPixelStorei);
+	NANX_EXPORT_APPLY(target, glPolygonOffset);
+	NANX_EXPORT_APPLY(target, glReadPixels);
+	NANX_EXPORT_APPLY(target, glReleaseShaderCompiler);
+	NANX_EXPORT_APPLY(target, glRenderbufferStorage);
+	NANX_EXPORT_APPLY(target, glSampleCoverage);
+	NANX_EXPORT_APPLY(target, glScissor);
+	NANX_EXPORT_APPLY(target, glShaderBinary);
+	NANX_EXPORT_APPLY(target, glShaderSource);
+	NANX_EXPORT_APPLY(target, glStencilFunc);
+	NANX_EXPORT_APPLY(target, glStencilFuncSeparate);
+	NANX_EXPORT_APPLY(target, glStencilMask);
+	NANX_EXPORT_APPLY(target, glStencilMaskSeparate);
+	NANX_EXPORT_APPLY(target, glStencilOp);
+	NANX_EXPORT_APPLY(target, glStencilOpSeparate);
+	NANX_EXPORT_APPLY(target, glTexImage2D);
+	NANX_EXPORT_APPLY(target, glTexParameterf);
+	NANX_EXPORT_APPLY(target, glTexParameterfv);
+	NANX_EXPORT_APPLY(target, glTexParameteri);
+	NANX_EXPORT_APPLY(target, glTexParameteriv);
+	NANX_EXPORT_APPLY(target, glTexSubImage2D);
+	NANX_EXPORT_APPLY(target, glUniform1f);
+	NANX_EXPORT_APPLY(target, glUniform1fv);
+	NANX_EXPORT_APPLY(target, glUniform1i);
+	NANX_EXPORT_APPLY(target, glUniform1iv);
+	NANX_EXPORT_APPLY(target, glUniform2f);
+	NANX_EXPORT_APPLY(target, glUniform2fv);
+	NANX_EXPORT_APPLY(target, glUniform2i);
+	NANX_EXPORT_APPLY(target, glUniform2iv);
+	NANX_EXPORT_APPLY(target, glUniform3f);
+	NANX_EXPORT_APPLY(target, glUniform3fv);
+	NANX_EXPORT_APPLY(target, glUniform3i);
+	NANX_EXPORT_APPLY(target, glUniform3iv);
+	NANX_EXPORT_APPLY(target, glUniform4f);
+	NANX_EXPORT_APPLY(target, glUniform4fv);
+	NANX_EXPORT_APPLY(target, glUniform4i);
+	NANX_EXPORT_APPLY(target, glUniform4iv);
+	NANX_EXPORT_APPLY(target, glUniformMatrix2fv);
+	NANX_EXPORT_APPLY(target, glUniformMatrix3fv);
+	NANX_EXPORT_APPLY(target, glUniformMatrix4fv);
+	NANX_EXPORT_APPLY(target, glUseProgram);
+	NANX_EXPORT_APPLY(target, glValidateProgram);
+	NANX_EXPORT_APPLY(target, glVertexAttrib1f);
+	NANX_EXPORT_APPLY(target, glVertexAttrib1fv);
+	NANX_EXPORT_APPLY(target, glVertexAttrib2f);
+	NANX_EXPORT_APPLY(target, glVertexAttrib2fv);
+	NANX_EXPORT_APPLY(target, glVertexAttrib3f);
+	NANX_EXPORT_APPLY(target, glVertexAttrib3fv);
+	NANX_EXPORT_APPLY(target, glVertexAttrib4f);
+	NANX_EXPORT_APPLY(target, glVertexAttrib4fv);
+	NANX_EXPORT_APPLY(target, glVertexAttribPointer);
+	NANX_EXPORT_APPLY(target, glViewport);
 
 	#endif // HAVE_OPENGLES2
 }
 
 } // namespace node_gles2
 
-#if NODE_VERSION_AT_LEAST(0,11,0)
-NODE_MODULE_CONTEXT_AWARE_BUILTIN(node_gles2, node_gles2::init)
-#else
 NODE_MODULE(node_gles2, node_gles2::init)
-#endif
-

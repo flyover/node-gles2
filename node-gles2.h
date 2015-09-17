@@ -27,8 +27,6 @@
 #ifndef NODE_GLES2_H
 #define NODE_GLES2_H
 
-#include <v8.h>
-#include <node.h>
 #include <nan.h>
 
 #if defined(__ANDROID__)
@@ -58,13 +56,8 @@
 
 namespace node_gles2 {
 
-#if NODE_VERSION_AT_LEAST(0,11,0)
-void init(v8::Handle<v8::Object> exports, v8::Handle<v8::Value> module, v8::Handle<v8::Context> context);
-#else
-void init(v8::Handle<v8::Object> exports/*, v8::Handle<v8::Value> module*/);
-#endif
+NAN_MODULE_INIT(init);
 
 } // namespace node_gles2
 
 #endif // NODE_GLES2_H
-
