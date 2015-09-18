@@ -62,8 +62,8 @@
 #define NANX_MEMBER_APPLY_SET(OBJECT_TEMPLATE, NAME) Nan::SetAccessor(OBJECT_TEMPLATE, NANX_SYMBOL(#NAME), NULL, _set_##NAME); // set only
 
 #define NANX_MEMBER_VALUE(NAME) NANX_MEMBER_VALUE_GET(NAME) NANX_MEMBER_VALUE_SET(NAME)
-#define NANX_MEMBER_VALUE_GET(NAME) static NAN_GETTER(_get_##NAME) { Unwrap(info.This())->SyncPull(); info.GetReturnValue().Set(Nan::New<v8::Value>(Unwrap(info.This())->m_wrap_##NAME)); }
-#define NANX_MEMBER_VALUE_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Value>()); Unwrap(info.This())->SyncPush(); info.GetReturnValue().Set(value); }
+#define NANX_MEMBER_VALUE_GET(NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Value>(Unwrap(info.This())->m_wrap_##NAME)); }
+#define NANX_MEMBER_VALUE_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Value>()); info.GetReturnValue().Set(value); }
 
 #define NANX_MEMBER_BOOLEAN(TYPE, NAME) NANX_MEMBER_BOOLEAN_GET(TYPE, NAME) NANX_MEMBER_BOOLEAN_SET(TYPE, NAME)
 #define NANX_MEMBER_BOOLEAN_GET(TYPE, NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Boolean>(static_cast<bool>(Peek(info.This())->NAME))); }
@@ -86,16 +86,16 @@
 #define NANX_MEMBER_UINT32_SET(TYPE, NAME) static NAN_SETTER(_set_##NAME) { Peek(info.This())->NAME = static_cast<TYPE>(value->Uint32Value()); }
 
 #define NANX_MEMBER_STRING(NAME) NANX_MEMBER_STRING_GET(NAME) NANX_MEMBER_STRING_SET(NAME)
-#define NANX_MEMBER_STRING_GET(NAME) static NAN_GETTER(_get_##NAME) { Unwrap(info.This())->SyncPull(); info.GetReturnValue().Set(Nan::New<v8::String>(Unwrap(info.This())->m_wrap_##NAME)); }
-#define NANX_MEMBER_STRING_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::String>()); Unwrap(info.This())->SyncPush(); info.GetReturnValue().Set(value); }
+#define NANX_MEMBER_STRING_GET(NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::String>(Unwrap(info.This())->m_wrap_##NAME)); }
+#define NANX_MEMBER_STRING_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::String>()); info.GetReturnValue().Set(value); }
 
 #define NANX_MEMBER_OBJECT(NAME) NANX_MEMBER_OBJECT_GET(NAME) NANX_MEMBER_OBJECT_SET(NAME)
-#define NANX_MEMBER_OBJECT_GET(NAME) static NAN_GETTER(_get_##NAME) { Unwrap(info.This())->SyncPull(); info.GetReturnValue().Set(Nan::New<v8::Object>(Unwrap(info.This())->m_wrap_##NAME)); }
-#define NANX_MEMBER_OBJECT_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Object>()); Unwrap(info.This())->SyncPush(); info.GetReturnValue().Set(value); }
+#define NANX_MEMBER_OBJECT_GET(NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Object>(Unwrap(info.This())->m_wrap_##NAME)); }
+#define NANX_MEMBER_OBJECT_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Object>()); info.GetReturnValue().Set(value); }
 
 #define NANX_MEMBER_ARRAY(NAME) NANX_MEMBER_ARRAY_GET(NAME) NANX_MEMBER_ARRAY_SET(NAME)
-#define NANX_MEMBER_ARRAY_GET(NAME) static NAN_GETTER(_get_##NAME) { Unwrap(info.This())->SyncPull(); info.GetReturnValue().Set(Nan::New<v8::Array>(Unwrap(info.This())->m_wrap_##NAME)); }
-#define NANX_MEMBER_ARRAY_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Array>()); Unwrap(info.This())->SyncPush(); info.GetReturnValue().Set(value); }
+#define NANX_MEMBER_ARRAY_GET(NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Array>(Unwrap(info.This())->m_wrap_##NAME)); }
+#define NANX_MEMBER_ARRAY_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Array>()); info.GetReturnValue().Set(value); }
 
 #define NANX_GLboolean(value)	static_cast<GLboolean>((value)->BooleanValue())		//	GLboolean	1+		A boolean value, either GL_TRUE or GL_FALSE
 #define NANX_GLbyte(value)		static_cast<GLbyte>((value)->Int32Value())			//	GLbyte		8		Signed, 2's complement binary integer								GL_BYTE
@@ -1608,7 +1608,6 @@ NANX_EXPORT(glViewport)
 
 NAN_MODULE_INIT(init)
 {
-
 	#ifdef HAVE_OPENGLES2
 
 //	NANX_CONSTANT(target, GL_ES_VERSION_2_0);
