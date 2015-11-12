@@ -63,7 +63,7 @@
 
 #define NANX_MEMBER_VALUE(NAME) NANX_MEMBER_VALUE_GET(NAME) NANX_MEMBER_VALUE_SET(NAME)
 #define NANX_MEMBER_VALUE_GET(NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Value>(Unwrap(info.This())->m_wrap_##NAME)); }
-#define NANX_MEMBER_VALUE_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Value>()); info.GetReturnValue().Set(value); }
+#define NANX_MEMBER_VALUE_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Value>()); }
 
 #define NANX_MEMBER_BOOLEAN(TYPE, NAME) NANX_MEMBER_BOOLEAN_GET(TYPE, NAME) NANX_MEMBER_BOOLEAN_SET(TYPE, NAME)
 #define NANX_MEMBER_BOOLEAN_GET(TYPE, NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Boolean>(static_cast<bool>(Peek(info.This())->NAME))); }
@@ -87,15 +87,15 @@
 
 #define NANX_MEMBER_STRING(NAME) NANX_MEMBER_STRING_GET(NAME) NANX_MEMBER_STRING_SET(NAME)
 #define NANX_MEMBER_STRING_GET(NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::String>(Unwrap(info.This())->m_wrap_##NAME)); }
-#define NANX_MEMBER_STRING_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::String>()); info.GetReturnValue().Set(value); }
+#define NANX_MEMBER_STRING_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::String>()); }
 
 #define NANX_MEMBER_OBJECT(NAME) NANX_MEMBER_OBJECT_GET(NAME) NANX_MEMBER_OBJECT_SET(NAME)
 #define NANX_MEMBER_OBJECT_GET(NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Object>(Unwrap(info.This())->m_wrap_##NAME)); }
-#define NANX_MEMBER_OBJECT_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Object>()); info.GetReturnValue().Set(value); }
+#define NANX_MEMBER_OBJECT_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Object>()); }
 
 #define NANX_MEMBER_ARRAY(NAME) NANX_MEMBER_ARRAY_GET(NAME) NANX_MEMBER_ARRAY_SET(NAME)
 #define NANX_MEMBER_ARRAY_GET(NAME) static NAN_GETTER(_get_##NAME) { info.GetReturnValue().Set(Nan::New<v8::Array>(Unwrap(info.This())->m_wrap_##NAME)); }
-#define NANX_MEMBER_ARRAY_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Array>()); info.GetReturnValue().Set(value); }
+#define NANX_MEMBER_ARRAY_SET(NAME) static NAN_SETTER(_set_##NAME) { Unwrap(info.This())->m_wrap_##NAME.Reset(value.As<v8::Array>()); }
 
 #define NANX_GLboolean(value)	static_cast<GLboolean>((value)->BooleanValue())		//	GLboolean	1+		A boolean value, either GL_TRUE or GL_FALSE
 #define NANX_GLbyte(value)		static_cast<GLbyte>((value)->Int32Value())			//	GLbyte		8		Signed, 2's complement binary integer								GL_BYTE
@@ -121,14 +121,14 @@
 
 #if NODE_VERSION_AT_LEAST(4, 0, 0)
 
-void* GetArrayBufferViewData(v8::Local<v8::Value> value, size_t byte_length = 0)
+static void* GetArrayBufferViewData(v8::Local<v8::Value> value, size_t byte_length = 0)
 {
 	if (value->IsNull()) { return NULL; }
 	assert(value->IsArrayBufferView());
 	v8::Local<v8::ArrayBufferView> array_buffer_view = value.As<v8::ArrayBufferView>();
 	if (!array_buffer_view->HasBuffer())
 	{
-		value.As<v8::Object>()->Get(NANX_SYMBOL("buffer"));
+		array_buffer_view->Get(NANX_SYMBOL("buffer"));
 		assert(array_buffer_view->HasBuffer());
 	}
 	v8::Local<v8::ArrayBuffer> array_buffer = array_buffer_view->Buffer();
@@ -139,14 +139,14 @@ void* GetArrayBufferViewData(v8::Local<v8::Value> value, size_t byte_length = 0)
 }
 
 template <typename TYPE>
-void* GetTypedArrayData(v8::Local<v8::Value> value, size_t length = 0)
+static void* GetTypedArrayData(v8::Local<v8::Value> value, size_t length = 0)
 {
 	if (value->IsNull()) { return NULL; }
 	assert(value->IsTypedArray());
 	v8::Local<v8::TypedArray> typed_array = value.As<v8::TypedArray>();
 	if (!typed_array->HasBuffer())
 	{
-		value.As<v8::Object>()->Get(NANX_SYMBOL("buffer"));
+		typed_array->Get(NANX_SYMBOL("buffer"));
 		assert(typed_array->HasBuffer());
 	}
 	v8::Local<v8::ArrayBuffer> array_buffer = typed_array->Buffer();
@@ -156,18 +156,38 @@ void* GetTypedArrayData(v8::Local<v8::Value> value, size_t length = 0)
 	return static_cast<void*>(static_cast<char*>(data) + byte_offset);
 }
 
-  int8_t* GetInt8ArrayData   (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<  int8_t*>(GetTypedArrayData<v8::Int8Array   >(value, length)); }
- uint8_t* GetUint8ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< uint8_t*>(GetTypedArrayData<v8::Uint8Array  >(value, length)); }
- int16_t* GetInt16ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< int16_t*>(GetTypedArrayData<v8::Int16Array  >(value, length)); }
-uint16_t* GetUint16ArrayData (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<uint16_t*>(GetTypedArrayData<v8::Uint16Array >(value, length)); }
- int32_t* GetInt32ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< int32_t*>(GetTypedArrayData<v8::Int32Array  >(value, length)); }
-uint32_t* GetUint32ArrayData (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<uint32_t*>(GetTypedArrayData<v8::Uint32Array >(value, length)); }
-   float* GetFloat32ArrayData(v8::Local<v8::Value> value, size_t length = 0) { return static_cast<   float*>(GetTypedArrayData<v8::Float32Array>(value, length)); }
-  double* GetFloat64ArrayData(v8::Local<v8::Value> value, size_t length = 0) { return static_cast<  double*>(GetTypedArrayData<v8::Float64Array>(value, length)); }
+static   int8_t* GetInt8ArrayData   (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<  int8_t*>(GetTypedArrayData<v8::Int8Array   >(value, length)); }
+static  uint8_t* GetUint8ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< uint8_t*>(GetTypedArrayData<v8::Uint8Array  >(value, length)); }
+static  int16_t* GetInt16ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< int16_t*>(GetTypedArrayData<v8::Int16Array  >(value, length)); }
+static uint16_t* GetUint16ArrayData (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<uint16_t*>(GetTypedArrayData<v8::Uint16Array >(value, length)); }
+static  int32_t* GetInt32ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< int32_t*>(GetTypedArrayData<v8::Int32Array  >(value, length)); }
+static uint32_t* GetUint32ArrayData (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<uint32_t*>(GetTypedArrayData<v8::Uint32Array >(value, length)); }
+static    float* GetFloat32ArrayData(v8::Local<v8::Value> value, size_t length = 0) { return static_cast<   float*>(GetTypedArrayData<v8::Float32Array>(value, length)); }
+static   double* GetFloat64ArrayData(v8::Local<v8::Value> value, size_t length = 0) { return static_cast<  double*>(GetTypedArrayData<v8::Float64Array>(value, length)); }
 
 #else
 
-void* GetArrayBufferViewData(v8::Local<v8::Value> value, size_t byte_length = 0)
+static size_t BytesPerElement(v8::ExternalArrayType type)
+{
+	switch (type)
+	{
+	case v8::kExternalInt8Array:
+	case v8::kExternalUint8Array:
+		return 1;
+	case v8::kExternalInt16Array:
+	case v8::kExternalUint16Array:
+		return 2;
+	case v8::kExternalInt32Array:
+	case v8::kExternalUint32Array:
+	case v8::kExternalFloat32Array:
+		return 4;
+	case v8::kExternalFloat64Array:
+		return 8;
+	}
+	return 0;
+}
+
+static void* GetArrayBufferViewData(v8::Local<v8::Value> value, size_t byte_length = 0)
 {
 	if (value->IsNull()) { return NULL; }
 	assert(value->IsObject());
@@ -176,12 +196,12 @@ void* GetArrayBufferViewData(v8::Local<v8::Value> value, size_t byte_length = 0)
 	object->Get(NANX_SYMBOL("buffer"));
 	#endif
 	assert(object->HasIndexedPropertiesInExternalArrayData());
-	assert((byte_length == 0) || (byte_length <= object->GetIndexedPropertiesExternalArrayDataLength()));
+	assert((byte_length == 0) || (byte_length <= (object->GetIndexedPropertiesExternalArrayDataLength() * BytesPerElement(object->GetIndexedPropertiesExternalArrayDataType()))));
 	return object->GetIndexedPropertiesExternalArrayData();
 }
 
 template <v8::ExternalArrayType TYPE>
-void* GetTypedArrayData(v8::Local<v8::Value> value, size_t length = 0)
+static void* GetTypedArrayData(v8::Local<v8::Value> value, size_t length = 0)
 {
 	if (value->IsNull()) { return NULL; }
 	assert(value->IsObject());
@@ -195,14 +215,14 @@ void* GetTypedArrayData(v8::Local<v8::Value> value, size_t length = 0)
 	return object->GetIndexedPropertiesExternalArrayData();
 }
 
-  int8_t* GetInt8ArrayData   (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<  int8_t*>(GetTypedArrayData<v8::kExternalInt8Array   >(value, length)); }
- uint8_t* GetUint8ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< uint8_t*>(GetTypedArrayData<v8::kExternalUint8Array  >(value, length)); }
- int16_t* GetInt16ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< int16_t*>(GetTypedArrayData<v8::kExternalInt16Array  >(value, length)); }
-uint16_t* GetUint16ArrayData (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<uint16_t*>(GetTypedArrayData<v8::kExternalUint16Array >(value, length)); }
- int32_t* GetInt32ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< int32_t*>(GetTypedArrayData<v8::kExternalInt32Array  >(value, length)); }
-uint32_t* GetUint32ArrayData (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<uint32_t*>(GetTypedArrayData<v8::kExternalUint32Array >(value, length)); }
-   float* GetFloat32ArrayData(v8::Local<v8::Value> value, size_t length = 0) { return static_cast<   float*>(GetTypedArrayData<v8::kExternalFloat32Array>(value, length)); }
-  double* GetFloat64ArrayData(v8::Local<v8::Value> value, size_t length = 0) { return static_cast<  double*>(GetTypedArrayData<v8::kExternalFloat64Array>(value, length)); }
+static   int8_t* GetInt8ArrayData   (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<  int8_t*>(GetTypedArrayData<v8::kExternalInt8Array   >(value, length)); }
+static  uint8_t* GetUint8ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< uint8_t*>(GetTypedArrayData<v8::kExternalUint8Array  >(value, length)); }
+static  int16_t* GetInt16ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< int16_t*>(GetTypedArrayData<v8::kExternalInt16Array  >(value, length)); }
+static uint16_t* GetUint16ArrayData (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<uint16_t*>(GetTypedArrayData<v8::kExternalUint16Array >(value, length)); }
+static  int32_t* GetInt32ArrayData  (v8::Local<v8::Value> value, size_t length = 0) { return static_cast< int32_t*>(GetTypedArrayData<v8::kExternalInt32Array  >(value, length)); }
+static uint32_t* GetUint32ArrayData (v8::Local<v8::Value> value, size_t length = 0) { return static_cast<uint32_t*>(GetTypedArrayData<v8::kExternalUint32Array >(value, length)); }
+static    float* GetFloat32ArrayData(v8::Local<v8::Value> value, size_t length = 0) { return static_cast<   float*>(GetTypedArrayData<v8::kExternalFloat32Array>(value, length)); }
+static   double* GetFloat64ArrayData(v8::Local<v8::Value> value, size_t length = 0) { return static_cast<  double*>(GetTypedArrayData<v8::kExternalFloat64Array>(value, length)); }
 
 #endif
 
