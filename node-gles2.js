@@ -24,8 +24,30 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. 
  */
 
-var gles2 = null;
-try { gles2 = gles2 || require('./build/Release/node-gles2.node'); } catch (err) {}
-try { gles2 = gles2 || process._linkedBinding('node_gles2'); } catch (err) {}
-try { gles2 = gles2 || process.binding('node_gles2'); } catch (err) {}
-module.exports = gles2;
+var node_gles2 = null;
+try { node_gles2 = node_gles2 || require('./build/Release/node-gles2.node'); } catch (err) {}
+try { node_gles2 = node_gles2 || process._linkedBinding('node_gles2'); } catch (err) {}
+try { node_gles2 = node_gles2 || process.binding('node_gles2'); } catch (err) {}
+module.exports = node_gles2;
+
+/// var node_gles2 = require('@flyover/node-gles2');
+/// var gl = node_gles2.gl();
+/// node_gles2.gl* -> gl.*
+/// node_gles2.GL_* -> gl.*
+node_gles2.gl = function (out) {
+	out = out || {};
+	var re = /^(gl|GL_)(.*)/;
+	for (var key in node_gles2) {
+		var match = key.match(re);
+		if (match && match[2]) {
+			//console.log(key, match[2]);
+			out[match[2]] = node_gles2[key];
+		} else {
+			//console.log("!!!", key);
+			out[key] = node_gles2[key];
+		}
+	}
+	return out;
+}
+
+//node_gles2.gl();
