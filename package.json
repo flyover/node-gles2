@@ -1,6 +1,6 @@
 {
   "name": "@flyover/node-gles2",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "author": "Flyover Games",
   "homepage": "http://flyovergames.com",
   "description": "Node OpenGL ES2 Package",
